@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Млечный Путь — 3D-планетарий</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="labels"></canvas>
+
+<button id="panelToggle" title="Скрыть/показать панель (U)">☰</button>
+
+<aside id="panel" class="glass">
+  <header class="brand">
+    <div class="logo"></div>
+    <div><b>Млечный Путь</b><small>интерактивный планетарий</small></div>
+  </header>
+  <input id="search" type="text" placeholder="Поиск: Вега, HD 48915, HIP 32349, M81, NGC 253, Лира…" autocomplete="off">
+  <div id="filters">
+    <button data-f="all" class="on">Все</button><button data-f="stars">Звёзды</button><button data-f="double">Двойные</button><button data-f="exo">Экзопланеты</button><button data-f="messier">Мессье</button><button data-f="nebula">Туманности</button><button data-f="snr">Остатки СН</button><button data-f="cluster">Скопления</button><button data-f="galaxy">Галактики</button><button data-f="quasar">Квазары</button><button data-f="pulsar">Пульсары</button><button data-f="probe">Аппараты</button>
+  </div>
+  <div id="lists"></div>
+
+  <div class="btnrow">
+    <button id="btnSun" class="primary">☉ Вернуться к Солнцу</button>
+    <button id="btnGalaxy">Обзор Галактики</button>
+  </div>
+
+  <div class="toggles">
+    <label><input type="checkbox" id="tLabels"> Подписи <kbd>L</kbd></label>
+    <label><input type="checkbox" id="tConst"> Созвездия <kbd>K</kbd></label>
+    <label><input type="checkbox" id="tGrid"> Сетка <kbd>B</kbd></label>
+    <label><input type="checkbox" id="tOrbits"> Орбиты <kbd>O</kbd></label>
+  </div>
+
+  <details id="help">
+    <summary>Управление</summary>
+    <table class="keys">
+      <tr><td><kbd>W</kbd><kbd>S</kbd></td><td>вперёд / назад</td></tr>
+      <tr><td><kbd>A</kbd><kbd>D</kbd></td><td>влево / вправо</td></tr>
+      <tr><td><kbd>R</kbd>/<kbd>Space</kbd> <kbd>F</kbd>/<kbd>C</kbd></td><td>вверх / вниз</td></tr>
+      <tr><td><kbd>Q</kbd><kbd>E</kbd></td><td>крен</td></tr>
+      <tr><td>ЛКМ + мышь, <kbd>←↑→↓</kbd></td><td>поворот взгляда</td></tr>
+      <tr><td>ПКМ + мышь</td><td>облёт объекта в центре кадра или точки впереди</td></tr>
+      <tr><td>СКМ + мышь</td><td>сдвиг камеры (панорама)</td></tr>
+      <tr><td>Колесо, <kbd>+</kbd><kbd>−</kbd></td><td>тяга (множитель скорости)</td></tr>
+      <tr><td><kbd>Shift</kbd></td><td>форсаж ×8</td></tr>
+      <tr><td>Клик</td><td>выбрать объект</td></tr>
+      <tr><td>Двойной клик, <kbd>Enter</kbd>/<kbd>G</kbd></td><td>автопилот к объекту</td></tr>
+      <tr><td><kbd>1</kbd>…<kbd>8</kbd></td><td>планеты Меркурий…Нептун</td></tr>
+      <tr><td><kbd>9</kbd> / <kbd>0</kbd></td><td>обзор Галактики / Стрелец A*</td></tr>
+      <tr><td><kbd>H</kbd></td><td>вернуться к Солнцу</td></tr>
+      <tr><td><kbd>P</kbd>, <kbd>[</kbd> <kbd>]</kbd></td><td>пауза, скорость времени</td></tr>
+      <tr><td><kbd>X</kbd> / <kbd>Esc</kbd></td><td>стоп / отмена автопилота</td></tr>
+      <tr><td><kbd>U</kbd></td><td>скрыть панель</td></tr>
+    </table>
+    <p class="note">Скорость адаптируется автоматически: она пропорциональна расстоянию до ближайшей поверхности — тысячи св. лет/с в масштабе Галактики и километры у поверхности планеты.</p>
+  </details>
+
+  <details id="settings">
+    <summary>Графика</summary>
+    <div class="slider"><span>Стиль</span><select id="sStyle"><option value="art">Художественный HDR</option><option value="real">Реалистичный</option></select><output></output></div>
+    <div class="slider"><span>Масштаб рендера</span><input id="sScale" type="range" min="0.5" max="1.5" step="0.05"><output id="sScaleV"></output></div>
+    <div class="slider"><span>Свечение (Bloom)</span><input id="sBloom" type="range" min="0" max="2" step="0.05"><output id="sBloomV"></output></div>
+    <div class="slider"><span>Экспозиция</span><input id="sExp" type="range" min="0.3" max="3" step="0.05"><output id="sExpV"></output></div>
+    <div class="slider"><span>Яркость Галактики</span><input id="sGal" type="range" min="0.2" max="3" step="0.05"><output id="sGalV"></output></div>
+    <div class="slider"><span>Предельная величина</span><input id="sMag" type="range" min="3" max="11" step="0.1"><output id="sMagV"></output></div>
+    <p class="note">GPU: <span id="gpuName">—</span><br>Частиц: <span id="partCount">—</span></p>
+  </details>
+</aside>
+
+<section id="card" class="glass hidden">
+  <button id="cardClose" title="Закрыть">×</button>
+  <h2 id="cardTitle"></h2>
+  <div id="cardSub"></div>
+  <table id="cardRows"></table>
+  <p id="cardInfo"></p>
+  <div id="cardFacts"></div>
+  <div id="cardPlanets"></div>
+  <button id="cardFly" class="primary">🚀 Лететь (Enter)</button>
+</section>
+
+<section id="hud" class="glass">
+  <div id="hWhere">—</div>
+  <div class="hrow"><span>Скорость</span><b id="hSpeed">—</b><span>тяга</span><b id="hThrottle">×1</b></div>
+  <div class="hrow"><span>От Солнца</span><b id="hSun">—</b><span id="hGal"></span></div>
+  <div class="hrow time"><button id="tSlow" title="Медленнее ([)">◀◀</button><button id="tPause" title="Пауза (P)">⏯</button><button id="tFast" title="Быстрее (])">▶▶</button><button id="tNow" title="Сейчас">сейчас</button><b id="hDate"></b><span id="hRate"></span><span id="hFps"></span></div>
+</section>
+
+<div id="toast"></div>
+<div id="tip"></div>
+<div id="error"></div>
+<div id="loading"><div class="spinner"></div><div class="ltitle">Млечный Путь</div><div id="loadStatus">Загрузка…</div></div>
+
+<script src="js/core/math.js"></script>
+<script src="js/core/gl.js"></script>
+<script src="js/data/catalog.js"></script>
+<!-- данные из tools/fetch_data.py (если их нет — работает встроенный каталог и процедурное небо) -->
+<script src="js/data/sky_panorama.js"></script>
+<script src="js/data/hyg_stars.js"></script>
+<script src="js/data/dso_ext.js"></script>
+<script src="js/data/exoplanets.js"></script>
+<script src="js/data/exoplanets_nasa.js"></script>
+<script src="js/data/pulsars.js"></script>
+<script src="js/data/landmarks.js"></script>
+<script src="js/data/catalog_ext.js"></script>
+<script src="js/data/facts.js"></script>
+<script src="js/data/earthmap.js"></script>
+<script src="js/shaders/common.js"></script>
+<script src="js/shaders/bodies.js"></script>
+<script src="js/shaders/space.js"></script>
+<script src="js/shaders/volumes.js"></script>
+<script src="js/shaders/probe.js"></script>
+<script src="js/shaders/deepsky.js"></script>
+<script src="js/world/solar.js"></script>
+<script src="js/world/probes.js"></script>
+<script src="js/world/cosmos.js"></script>
+<script src="js/world/procsystem.js"></script>
+<script src="js/world/galaxy.js"></script>
+<script src="js/world/localstars.js"></script>
+<script src="js/app/camera.js"></script>
+<script src="js/app/scene.js"></script>
+<script src="js/app/renderer.js"></script>
+<script src="js/app/ui.js"></script>
+<script src="js/app/main.js"></script>
+</body>
+</html>
