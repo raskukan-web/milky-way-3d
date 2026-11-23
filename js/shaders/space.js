@@ -264,12 +264,16 @@ void main(){
   if (u_innerR > 0.0) fade *= smoothstep(u_innerR * 0.5, u_innerR, length(i_pos));
   vec4 vp = u_view * vec4(rel, 1.0);
   if (v <= 0.0 || fade <= 0.0 || gl_InstanceID == u_hide || vp.z > 0.0){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-  float vv = min(v, 14.0);
+  // яркость — от фиксированной точки отсчёта (6,5ᵐ), а предел u_magLimit только отсекает слабые звёзды:
+  // при глубоком пределе (8–10ᵐ) добавляются тысячи крошечных тусклых точек, а яркие не пересвечиваются
+  float vv = clamp(6.5 - m, 0.0, 14.0);
   float core = (1.0 + 0.32 * vv) * u_scale;
-  float I = 0.22 * pow(1.3, vv) * smoothstep(0.0, 1.5, v) * fade * u_bright;
+  float I = 0.22 * pow(1.3, min(6.5 - m, 14.0)) * smoothstep(0.0, 1.5, v) * fade * u_bright;
   float rad = core * 4.0;
   v_uv = a_corner * 4.0;
-  v_col = i_prop.rgb * I;
+  // цвета насыщеннее: голубые, белые, жёлтые и оранжевые «маяки»
+  float lc = dot(i_prop.rgb, vec3(0.3, 0.5, 0.2));
+  v_col = max(mix(vec3(lc), i_prop.rgb, 1.35), 0.0) * I;
   v_core = core;
   v_spike = smoothstep(8.5, 13.0, vv);
   vp.xy += a_corner * (rad / u_pxPerRad) * (-vp.z);

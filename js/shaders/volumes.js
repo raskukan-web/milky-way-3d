@@ -20,6 +20,16 @@ uniform float u_steps;       // базовое число шагов на диа
 uniform vec4 u_par;          // параметры вида (синхротрон, тонкая оболочка, узлы, скорость вращения пульсара)
 out vec4 o;
 vec3 SP;
+// эллипс (центр c, полуоси r, поворот ang) — приближённое расстояние со знаком
+float sdEll(vec2 p, vec2 c, vec2 r, float ang){ p -= c; float cs = cos(ang), sn = sin(ang); p = vec2(cs * p.x + sn * p.y, -sn * p.x + cs * p.y); return (length(p / r) - 1.0) * min(r.x, r.y); }
+// силуэт Конской Головы (Barnard 33): шея от кромки облака, наклонённая голова, морда вниз, ухо
+float horse(vec2 q){
+  float neck = sdEll(q, vec2(0.085, -0.03), vec2(0.06, 0.14), -0.22);
+  float head = sdEll(q, vec2(0.035, 0.115), vec2(0.078, 0.058), 0.5);
+  float snout = sdEll(q, vec2(-0.045, 0.06), vec2(0.062, 0.03), 0.8);
+  float ear = sdEll(q, vec2(0.085, 0.185), vec2(0.017, 0.042), -0.35);
+  return min(min(neck, head), min(snout, ear));
+}
 void sampleNeb(vec3 p, out vec3 emis, out float absb){
   float r = length(p);
   emis = vec3(0.0); absb = 0.0;
@@ -38,7 +48,29 @@ void sampleNeb(vec3 p, out vec3 emis, out float absb){
     emis = c * d * 0.9 + mix(u_col2, vec3(1.0, 0.95, 0.9), 0.5) * (core * 1.1 + hot * d * 0.7);
     float dust = smoothstep(0.55, 0.85, fbm(q * 2.5 + SP + 3.3, 5) * 0.5 + 0.5) * smoothstep(1.0, 0.3, rs);
     float lane = smoothstep(0.22, 0.0, abs(s.y - 0.35 - 0.15 * s.x + 0.1 * w.x)) * smoothstep(0.2, 0.6, s.x + 0.3) * body;
-    absb = dust * 4.0 + lane * 3.0;
+    // плотные тёмные глобулы с резким краем — перекрывают свечение позади себя (3D-объём)
+    float glob = smoothstep(0.625, 0.655, fbm(q * 4.5 + SP + 11.0, 4) * 0.5 + 0.5) * smoothstep(0.95, 0.3, rs);
+    absb = dust * 4.0 + lane * 3.0 + glob * 18.0;
+  } else if (u_kind == 7){
+    // Конская Голова: светящийся лист H-α (IC 434, ионизован σ Ориона сверху) с вертикальными прожилками;
+    // перед ним — плотное тёмное облако L1630 с ровной кромкой, из которой поднимается силуэт головы (B33).
+    vec2 xy = p.xy;
+    float wv = fbm(vec3(xy * 5.0, 1.0) + SP, 4);
+    float sheet = exp(-pow((p.z - 0.15) / 0.22, 2.0)) * smoothstep(1.0, 0.55, length(xy));
+    float stri = fbm(vec3(p.x * 9.0, p.y * 1.6, p.z * 3.0) + SP, 5) * 0.5 + 0.5;
+    float grad = smoothstep(-0.6, 0.7, p.y);
+    emis = u_col1 * sheet * (0.35 + 1.3 * stri) * (0.25 + 1.2 * grad);
+    // кромка облака и силуэт (рваные края — шум)
+    float edge = -0.07 + 0.035 * fbm(vec3(p.x * 7.0, 0.0, 2.0) + SP, 3);
+    vec2 qh = xy + 0.012 * vec2(fbm(vec3(xy * 22.0, 3.0) + SP, 3), fbm(vec3(xy * 22.0, 7.0) + SP, 3));
+    float dsil = min(p.y - edge, horse((qh - vec2(-0.05, -0.04)) / 2.1) * 2.1);   // голова ~ четверть поперечника IC 434
+    float cloud = smoothstep(0.012, -0.01, dsil) * smoothstep(-0.75, -0.55, p.z) * smoothstep(0.12, 0.0, p.z) * smoothstep(1.0, 0.7, length(xy));
+    // светящийся фронт ионизации по краю облака
+    float rim = exp(-pow(dsil / 0.01, 2.0)) * smoothstep(-0.4, -0.05, p.z) * smoothstep(0.1, -0.05, p.z);
+    emis += u_col2 * rim * 1.6;
+    // голубая отражательная туманность NGC 2023 в облаке
+    emis += u_col3 * exp(-dot(xy - vec2(-0.38, -0.36), xy - vec2(-0.38, -0.36)) / 0.006) * exp(-pow((p.z + 0.45) / 0.1, 2.0)) * 2.0;
+    absb = cloud * (22.0 + 10.0 * wv) + sheet * 0.15;
   } else if (u_kind == 1){
     // толстый тор (бочка), видимый с торца: яркое кольцо и более тёмный центр
     float rho = length(vec2(p.x / 0.85, p.y));
@@ -76,8 +108,8 @@ void sampleNeb(vec3 p, out vec3 emis, out float absb){
     float f = fbm(q * 3.0 + SP, 6) * 0.5 + 0.5;
     float d = shell * pow(smoothstep(0.35, 0.85, f), 1.5);
     emis = mix(u_col1, u_col2, smoothstep(0.4, 0.85, rq)) * d * 1.3;
-    float globs = smoothstep(0.74, 0.9, fbm(q * 7.0 + SP + 2.0, 4) * 0.5 + 0.5) * shell;
-    absb = globs * 9.0 + d * 0.3;
+    float globs = smoothstep(0.77, 0.81, fbm(q * 7.0 + SP + 2.0, 4) * 0.5 + 0.5) * shell;
+    absb = globs * 18.0 + d * 0.3;
   } else if (u_kind == 6){
     // пульсар: вращающиеся лучи вдоль магнитной оси, экваториальный тор ветра и джеты
     float wv = u_time * u_par.w;
@@ -107,8 +139,9 @@ void sampleNeb(vec3 p, out vec3 emis, out float absb){
     vec3 c = mix(u_col1, u_col2, smoothstep(0.3, 0.8, ridged(q * 3.0 + SP, 4)));
     c = mix(c, u_col3, hot * 0.6);
     emis = c * (d * 1.3 + hot * 0.8);
-    float pil = smoothstep(0.78, 0.95, ridged(q * vec3(2.0, 2.0, 0.7) + SP + 2.0, 5)) * smoothstep(1.0, 0.3, r);
-    absb = pil * 7.0 + smoothstep(0.6, 0.85, fbm(q * 3.0 + SP + 1.0, 4) * 0.5 + 0.5) * 2.0;
+    float pil = smoothstep(0.84, 0.9, ridged(q * vec3(2.0, 2.0, 0.7) + SP + 2.0, 5)) * smoothstep(1.0, 0.3, r);
+    float glob = smoothstep(0.69, 0.72, fbm(q * 5.5 + SP + 6.0, 4) * 0.5 + 0.5) * smoothstep(1.0, 0.4, r);
+    absb = pil * 12.0 + glob * 14.0 + smoothstep(0.6, 0.85, fbm(q * 3.0 + SP + 1.0, 4) * 0.5 + 0.5) * 2.0;
   }
 }
 void main(){
@@ -366,5 +399,88 @@ void main(){
   float n = fract(sin(dot(gl_FragCoord.xy + fract(u_time) * 61.0, vec2(12.9898, 78.233))) * 43758.5453);
   c += (n - 0.5) / 255.0;
   o = vec4(c, 1.0);
+}`;
+  // ---------- Оптика камеры: дифракционные лучи, блики объектива, анаморфное свечение ----------
+  // Источники (до 16 самых ярких точек в кадре) передаются из JS: экранная позиция (px), видимая яркость и цвет.
+  // Лучи: 8 игольчатых (4 длинных + 4 коротких, как у телескопа с крестовиной), с лёгкой хроматической
+  // дисперсией — красный «хвост» луча длиннее синего, вдоль луча слабая радужная рябь.
+  // Блики (ghosts) — для самого яркого источника: полупрозрачные диски с радужной кромкой вдоль оси
+  // «источник → центр кадра», плюс горизонтальная анаморфная полоса.
+  G.flareFS = G.header + `
+in vec2 v_uv;
+uniform vec2 u_res;
+uniform int u_n;
+uniform vec4 u_src[16];      // x, y (px), z — яркость, w — поворот лучей
+uniform vec3 u_scol[16];
+uniform float u_ghost;
+out vec4 o;
+vec3 spectrum(float t){ t = fract(t); return clamp(vec3(1.5 - abs(t * 4.0 - 1.0), 1.5 - abs(t * 4.0 - 2.0), 1.5 - abs(t * 4.0 - 3.0)), 0.0, 1.0); }
+void main(){
+  vec2 fc = v_uv * u_res;
+  if (v_uv.x > 1.0 || v_uv.y > 1.0) discard;
+  vec3 col = vec3(0.0);
+  for (int i = 0; i < 16; i++){
+    if (i >= u_n) break;
+    vec4 s = u_src[i];
+    vec2 d = fc - s.xy;
+    float I = s.z;
+    float L = (16.0 + 34.0 * log2(1.0 + I)) * u_res.y / 1080.0;
+    if (dot(d, d) > L * L * 1.6) continue;
+    vec3 acc = vec3(0.0);
+    for (int k = 0; k < 4; k++){
+      float a = s.w + float(k) * 0.7853982;
+      vec2 dir = vec2(cos(a), sin(a));
+      float along = abs(dot(d, dir));
+      float perp = abs(dot(d, vec2(-dir.y, dir.x)));
+      float w = 0.5 + 0.7 * along / L;
+      float core = exp(-perp * perp / (w * w));
+      vec3 len = L * vec3(1.0, 0.88, 0.76) * (k == 0 || k == 2 ? 1.0 : 0.5);
+      vec3 fall = exp(-along / (len * 0.3));
+      vec3 tint = mix(vec3(1.0), spectrum(along / (L * 0.22) + 0.15), 0.3 * smoothstep(0.08, 0.4, along / L));
+      acc += core * fall * tint;
+    }
+    col += u_scol[i] * acc * sqrt(I) * 0.55;
+  }
+  if (u_n > 0 && u_ghost > 0.001){
+    vec2 p0 = u_src[0].xy, c = u_res * 0.5;
+    vec2 axis = c - p0;
+    float sc = u_res.y;
+    for (int j = 0; j < 6; j++){
+      float t = j == 0 ? 0.55 : j == 1 ? 1.15 : j == 2 ? 1.42 : j == 3 ? 1.78 : j == 4 ? 2.1 : 2.6;
+      float rad = (j == 0 ? 0.03 : j == 1 ? 0.055 : j == 2 ? 0.016 : j == 3 ? 0.085 : j == 4 ? 0.04 : 0.13) * sc;
+      vec2 g = p0 + axis * t;
+      float rr = length(fc - g) / rad;
+      if (rr > 1.3) continue;
+      float disc = smoothstep(1.0, 0.75, rr) * 0.1;
+      float rim = exp(-pow((rr - 0.95) / 0.06, 2.0)) * 0.22;
+      vec3 gc = mix(vec3(0.6, 0.8, 1.0), spectrum(rr * 0.9 + float(j) * 0.17), 0.45);
+      col += gc * (disc + rim) * u_ghost * (j == 5 ? 0.35 : 1.0);
+    }
+    // анаморфная полоса через источник
+    vec2 d0 = fc - p0;
+    float streak = exp(-d0.y * d0.y / (1.6 * 1.6)) * exp(-abs(d0.x) / (u_res.x * 0.09));
+    col += vec3(0.45, 0.65, 1.0) * streak * u_ghost * 0.6;
+  }
+  o = vec4(col, 0.0);
+}`;
+
+  // ---------- Автоэкспозиция: средняя лог-яркость кадра (сетка 4×4 выборок на пиксель маленькой цели) ----------
+  // R — средний log2 яркости (упакован в 0…1), G — доля очень ярких выборок (Солнце/звезда вблизи в кадре)
+  G.lumFS = G.header + `
+in vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_cell;     // размер ячейки (в UV)
+out vec4 o;
+void main(){
+  float acc = 0.0, br = 0.0;
+  for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++){
+    vec2 uv = v_uv - u_cell * 0.5 + u_cell * (vec2(float(x), float(y)) + 0.5) / 4.0;
+    vec3 c = texture(u_src, uv).rgb;
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    acc += log2(max(l, 1e-5));
+    br += step(3.0, l);
+  }
+  acc /= 16.0; br /= 16.0;
+  o = vec4(clamp((acc + 16.0) / 22.0, 0.0, 1.0), br, 0.0, 1.0);
 }`;
 })();

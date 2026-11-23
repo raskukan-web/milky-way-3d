@@ -23,9 +23,11 @@
   // тип поверхности → вариант шейдера планет (см. #if FAM в bodies.js)
   const PLANET_FAM = { 0: 0, 8: 0, 9: 0, 10: 0, 3: 1, 12: 1, 13: 1, 15: 1, 16: 1, 2: 2, 1: 3, 4: 3, 5: 3, 6: 3, 7: 3, 11: 3, 14: 3, 17: 3 };
   const NEB = {
-    m42: { kind: 0, col1: [1.0, 0.25, 0.36], col2: [0.3, 0.9, 0.78], col3: [1, 1, 1], bright: 2.2, rb: 1.0 },
+    m42: { kind: 0, col1: [1.0, 0.16, 0.42], col2: [0.25, 0.85, 0.95], col3: [1, 1, 1], bright: 3.0, rb: 1.0 },
     m1: { kind: 2, col1: [1.0, 0.42, 0.2], col2: [1.0, 0.78, 0.4], col3: [0.45, 0.55, 1.0], bright: 0.8, rb: 1.0, par: [1, 0, 0, 0] },
     m57: { kind: 1, col1: [0.3, 0.55, 1.0], col2: [0.45, 1.0, 0.45], col3: [1.0, 0.3, 0.2], bright: 0.4, rb: 1.0 },
+    horsehead: { kind: 7, col1: [1.0, 0.12, 0.17], col2: [1.0, 0.35, 0.4], col3: [0.45, 0.62, 1.0], bright: 0.9, rb: 1.0 },
+    flame: { kind: 0, col1: [1.0, 0.5, 0.18], col2: [1.0, 0.72, 0.4], col3: [1, 1, 1], bright: 0.8, rb: 1.0 },
     m16: { kind: 4, col1: [1.0, 0.32, 0.3], col2: [0.95, 0.62, 0.38], col3: [0.4, 0.9, 0.85], bright: 0.6, rb: 1.0 },
     carina: { kind: 4, col1: [1.0, 0.28, 0.35], col2: [0.92, 0.5, 0.62], col3: [0.5, 0.8, 1.0], bright: 0.5, rb: 1.0 },
     m45: { kind: 3, col1: [0.42, 0.58, 1.0], col2: [0, 0, 0], col3: [0, 0, 0], bright: 0.45, rb: 1.5 },
@@ -48,7 +50,7 @@
   class Renderer {
     constructor(glc, scene) {
       this.glc = glc; this.gl = glc.gl; this.scene = scene;
-      this.s = { renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 6.5, quality: 1, artistic: true, panorama: true, panoGain: 1.0 };
+      this.s = { renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 8.5, quality: 1, artistic: true, panorama: true, panoGain: 1.0 };
       this.width = 1; this.height = 1;
       this.compile();
       this.buildStatic();
@@ -78,6 +80,8 @@
       this.pGas = c('gas', G.particleVS, G.gasFS);
       this.pProbe = c('probe', G.impostorVS, G.probeFS);
       this.pDSO = c('deepsky', G.dsoVS, G.dsoFS);
+      this.pFlare = c('flare', G.fullscreenVS, G.flareFS);
+      this.pLum = c('lum', G.fullscreenVS, G.lumFS);
     }
     makeLineVAO() {
       const gl = this.gl;
@@ -428,7 +432,8 @@
     buildNearSprites() {
       const cam = this.cam.pos, out = [];
       const add = (pos, col, m) => { out.push(pos[0] - cam[0], pos[1] - cam[1], pos[2] - cam[2], col[0], col[1], col[2], m); };
-      const absFor = (d, v) => this.s.magLimit - v - 5 * Math.log10(Math.max(d, 1e-20) / 32.6156);
+      // маркеры планет: звёздная величина относительно точки отсчёта яркости спрайтов (6,5ᵐ)
+      const absFor = (d, v) => 6.5 - v - 5 * Math.log10(Math.max(d, 1e-20) / 32.6156);
       for (const sys of this.scene.systems) {
         const st = sys.star;
         const D = v3.dist(cam, st.pos);
@@ -632,7 +637,7 @@
       const c = cam.pos, hi = [Math.fround(c[0]), Math.fround(c[1]), Math.fround(c[2])];
       p.set('u_camHi', f32(hi)); p.set('u_camLo', f32([c[0] - hi[0], c[1] - hi[1], c[2] - hi[2]]));
       // «длинная экспозиция» для глубокого космоса; пока видна фотопанорама неба — скромнее, чтобы не засорять её
-      this.dsoMagLim = this.s.magLimit + 7 - 3 * panoK;
+      this.dsoMagLim = this.s.magLimit + 5 - 3 * panoK;   // предел звёзд по умолчанию 8,5ᵐ → объекты DSO как раньше
       p.set('u_magLim', this.dsoMagLim);
       p.set('u_scale', MW.dpr() * this.s.renderScale); p.set('u_bright', 1.0);
       p.set('u_bgShrink', this.focusK || 0);
@@ -854,8 +859,94 @@
       for (const d of draw) d.f();
       this.stats.bodies = draw.length;
 
-      // 8. bloom + композитинг
+      // 8. оптика камеры (лучи и блики ярких звёзд), автоэкспозиция, bloom + композитинг
+      this.drawLensEffects(target);
+      this.updateExposure(target);
       this.bloomAndComposite(target);
+    }
+
+    /* Самые яркие точечные источники в кадре (Солнце, звезда системы, яркие звёзды каталога): экранная позиция,
+       видимая яркость (по звёздной величине) и цвет. Источник за диском планеты/спутника не учитывается. */
+    lensSources() {
+      const cam = this.cam, cv = this.glc.canvas, out = [];
+      const k = MW.dpr() * this.s.renderScale;
+      const occl = [];
+      for (const sys of this.scene.systems) for (const b of sys.bodies) {
+        const rel = v3.sub(b.pos, cam.pos), d = v3.len(rel);
+        if (this.pxRadius(b.radius, d) > 1.5) occl.push({ rel, d, r2: b.radius * b.radius });
+      }
+      const hidden = (rel, L) => { for (const o of occl) { if (o.d >= L) continue; const t = v3.dot(o.rel, rel) / L; if (t > 0 && o.d * o.d - t * t < o.r2) return true; } return false; };
+      const add = (pos, color, absMag) => {
+        if (absMag === undefined || absMag === null) return;
+        const rel = v3.sub(pos, cam.pos), L = v3.len(rel);
+        const m = absMag + 5 * Math.log10(Math.max(L, 1e-12) / 32.6156);
+        if (m > 1.3) return;
+        const pp = this.project(pos);
+        if (!pp || !pp.onScreen || hidden(rel, L)) return;
+        const I = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40);
+        const c = color || [1, 1, 1], mx = Math.max(c[0], c[1], c[2], 1e-3);
+        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I, col: c.map((x) => 0.5 * x / mx + 0.5) });
+      };
+      for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag);
+      for (const st of this.scene.catalog.stars) if (!st.isSun) add(st.pos, st.color, st.absMag);
+      if (!this._brightHyg) this._brightHyg = this.scene.catalog.hygStars.filter((s) => s.absMag < 2.5 || s.proper);
+      for (const st of this._brightHyg) add(st.pos, st.color, st.absMag);
+      for (const c of MW.catalog.binaries) add(c.pos, c.color, c.absMag);
+      // одна и та же звезда может быть в двух каталогах — убираем дубли по экранной позиции
+      out.sort((a, b) => b.I - a.I);
+      const res = [];
+      for (const o of out) { if (res.some((r) => Math.abs(r.x - o.x) < 3 && Math.abs(r.y - o.y) < 3)) continue; res.push(o); if (res.length >= 16) break; }
+      return res;
+    }
+    drawLensEffects(target) {
+      if (this.s.lens === false) { this.lensPeak = 0; return; }
+      const src = this.lensSources();
+      this.lensPeak = src.length ? src[0].I : 0;
+      this.stats.lens = src.length;
+      if (!src.length) return;
+      const a = new Float32Array(64), c = new Float32Array(48);
+      src.forEach((o, i) => { a.set([o.x, o.y, o.I, 0.32], i * 4); c.set(o.col, i * 3); });
+      const p = this.pFlare.use();
+      p.set('u_res', [this.width, this.height]); p.set('u_n', src.length);
+      p.set('u_src', a); p.set('u_scol', c);
+      // блики объектива и анаморфная полоса — только от действительно ярких источников (Солнце, звезда рядом)
+      p.set('u_ghost', MW.util.clamp((src[0].I - 3) / 25, 0, 1) * 0.35);
+      this.glc.bindTarget(target);
+      this.glc.blendAdd();
+      this.glc.fullscreen();
+    }
+    /* Автоэкспозиция («адаптация глаза»): раз в несколько кадров меряем среднюю лог-яркость кадра и долю очень
+       ярких пикселей; яркое Солнце в кадре плавно снижает экспозицию, тёмный глубокий космос — повышает
+       (проявляются слабые звёзды и газ, как на длинной выдержке). Затемнение быстрее (~0,5 с), осветление ~1,6 с. */
+    updateExposure(target) {
+      const gl = this.gl, now = performance.now();
+      const dt = Math.min(0.25, ((now - (this._expT || now)) / 1000) || 0.016);
+      this._expT = now;
+      if (this.autoExp === undefined) { this.autoExp = 1; this.expTarget = 1; }
+      if (this.s.autoExposure === false) { this.autoExp = 1; return; }
+      this._expFrame = (this._expFrame || 0) + 1;
+      if (this._expFrame % 6 === 0) {
+        if (!this.tLum) this.tLum = this.glc.target(32, 18, { internal: gl.RGBA8, type: gl.UNSIGNED_BYTE });
+        this.glc.bindTarget(this.tLum);
+        this.glc.noBlend();
+        const p = this.pLum.use();
+        p.tex('u_src', target.tex);
+        p.set('u_cell', [1 / 32, 1 / 18]);
+        this.glc.fullscreen();
+        const px = this._lumPx || (this._lumPx = new Uint8Array(32 * 18 * 4));
+        gl.readPixels(0, 0, 32, 18, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        let lg = 0, br = 0;
+        for (let i = 0; i < 32 * 18; i++) { lg += px[i * 4] / 255 * 22 - 16; br += px[i * 4 + 1] / 255; }
+        lg /= 32 * 18; br /= 32 * 18;
+        this.stats.lumLog = lg; this.stats.brightFrac = br;
+        const key = MW.util.clamp(Math.pow(2, (this.expKeyLog ?? -6.5) - lg), 0.05, 50);
+        // Солнце/яркая звезда в кадре занимает доли процента площади — экспозицию снижаем и по яркости источника
+        this.expTarget = MW.util.clamp(Math.pow(key, 0.3), 0.62, 1.4) / (1 + 6 * br) / (1 + 0.15 * Math.log2(1 + Math.max(0, (this.lensPeak || 0) - 8) / 2));   // яркие звёзды неба (Сириус ~10) не в счёт
+        this.glc.bindTarget(target);
+      }
+      const tau = this.expTarget < this.autoExp ? 0.5 : 1.6;
+      this.autoExp += (this.expTarget - this.autoExp) * (1 - Math.exp(-dt / tau));
+      this.stats.autoExp = this.autoExp;
     }
 
     bloomAndComposite(src) {
@@ -888,7 +979,7 @@
       // на галактических масштабах bloom слабее: звёздные россыпи резкие, без мутного ореола
       const sd = v3.len(this.cam.pos);
       const galScale = MW.util.smoothstep(4000, 40000, sd) * (1 - MW.util.smoothstep(3e7, 2e8, sd));
-      c.set('u_bloomStr', this.s.bloom * (1 - 0.6 * galScale)); c.set('u_exposure', this.s.exposure);
+      c.set('u_bloomStr', this.s.bloom * (1 - 0.6 * galScale)); c.set('u_exposure', this.s.exposure * (this.autoExp || 1));
       c.set('u_time', this.scene.realTime); c.set('u_vignette', 0.35); c.set('u_art', this.s.artistic ? 1 : 0);
       this.glc.fullscreen();
     }
