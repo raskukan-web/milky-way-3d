@@ -19,6 +19,7 @@
     saturn: [9.53667594, 0.05386179, 2.48599187, 49.95424423, 92.59887831, 113.66242448, -0.00125060, -0.00050991, 0.00193609, 1222.49362201, -0.41897216, -0.28867794],
     uranus: [19.18916464, 0.04725744, 0.77263783, 313.23810451, 170.95427630, 74.01692503, -0.00196176, -0.00004397, -0.00242939, 428.48202785, 0.40805281, 0.04240589],
     neptune: [30.06992276, 0.00859048, 1.77004347, -55.12002969, 44.96476227, 131.78422574, 0.00026291, 0.00005105, 0.00035372, 218.45945325, -0.32241464, -0.00508664],
+    pluto: [39.48211675, 0.24882730, 17.14001206, 238.92903833, 224.06891629, 110.30393684, -0.00031596, 0.00005170, 0.00004818, 145.20780515, -0.04062942, -0.01183482],
   };
 
   function solveKepler(M, e) {
@@ -47,39 +48,42 @@
 
   // Визуальные профили: type — номер ветки в шейдере планеты
   const PLANETS = [
-    { id: 'mercury', name: 'Меркурий', radiusKm: 2439.7, rotH: 1407.6, pole: [281.01, 61.41], type: 0, col1: [0.42, 0.4, 0.38], col2: [0.6, 0.57, 0.53], bump: 6,
+    { id: 'mercury', tex: 'mercury', texH: 0.14, w0: 329.5988, wd: 6.1385108, name: 'Меркурий', radiusKm: 2439.7, rotH: 1407.6, pole: [281.01, 61.41], type: 0, col1: [0.42, 0.4, 0.38], col2: [0.6, 0.57, 0.53], bump: 6,
       info: 'Ближайшая к Солнцу планета. Испещрена кратерами, почти лишена атмосферы; перепад температур от −180 до +430 °C.', mass: '0.055 M⊕', period: '88 сут' },
-    { id: 'venus', name: 'Венера', radiusKm: 6051.8, rotH: -5832.5, pole: [272.76, 67.16], type: 1, atmo: [0.95, 0.8, 0.55, 0.06], atmoDens: 6,
+    { id: 'venus', tex: 'venus', texAux: 'venus_surface', w0: 160.20, wd: -1.4813688, name: 'Венера', radiusKm: 6051.8, rotH: -5832.5, pole: [272.76, 67.16], type: 1, atmo: [0.95, 0.8, 0.55, 0.06], atmoDens: 6,
       info: 'Плотная атмосфера из CO₂ и облака серной кислоты; парниковый эффект разогревает поверхность до 465 °C.', mass: '0.815 M⊕', period: '225 сут' },
-    { id: 'earth', name: 'Земля', radiusKm: 6371, rotH: 23.934, pole: [0, 90], type: 2, atmo: [0.28, 0.52, 1.0, 0.025], atmoDens: 9, clouds: 0.08, bump: 4,
+    { id: 'earth', tex: 'earth', texAux: 'earth_aux', texNrm: 'earth_nrm', name: 'Земля', radiusKm: 6371, rotH: 23.934, pole: [0, 90], type: 2, atmo: [0.28, 0.52, 1.0, 0.025], atmoDens: 9, clouds: 0.08, bump: 4,
       info: 'Наш дом. Единственная известная планета с жидкими океанами на поверхности и жизнью.', mass: '1 M⊕', period: '365.25 сут' },
-    { id: 'mars', name: 'Марс', radiusKm: 3389.5, rotH: 24.623, pole: [317.68, 52.89], type: 3, atmo: [0.9, 0.6, 0.45, 0.02], atmoDens: 1.6, bump: 6,
+    { id: 'mars', tex: 'mars', texH: 0.12, w0: 176.049863, wd: 350.891982443, name: 'Марс', radiusKm: 3389.5, rotH: 24.623, pole: [317.68, 52.89], type: 3, atmo: [0.9, 0.6, 0.45, 0.02], atmoDens: 1.6, bump: 6,
       info: 'Красная планета: оксиды железа, полярные шапки, вулкан Олимп и каньон Долины Маринер.', mass: '0.107 M⊕', period: '687 сут' },
-    { id: 'jupiter', name: 'Юпитер', radiusKm: 69911, rotH: 9.925, pole: [268.06, 64.5], type: 4, col1: [0.93, 0.88, 0.78], col2: [0.62, 0.43, 0.3], col3: [0.82, 0.62, 0.45],
+    { id: 'jupiter', tex: 'jupiter', w0: 284.95, wd: 870.536, name: 'Юпитер', radiusKm: 69911, rotH: 9.925, pole: [268.06, 64.5], type: 4, col1: [0.93, 0.88, 0.78], col2: [0.62, 0.43, 0.3], col3: [0.82, 0.62, 0.45],
       bands: 22, turb: 1.0, feature: 1, atmo: [0.8, 0.75, 0.65, 0.01], atmoDens: 2,
       info: 'Крупнейшая планета: газовый гигант с полосами облаков и Большим красным пятном — штормом крупнее Земли.', mass: '317.8 M⊕', period: '11.86 лет' },
-    { id: 'saturn', name: 'Сатурн', radiusKm: 58232, rotH: 10.656, pole: [40.59, 83.54], type: 5, col1: [0.9, 0.82, 0.64], col2: [0.76, 0.64, 0.45], col3: [0.7, 0.62, 0.5],
+    { id: 'saturn', tex: 'saturn', ringTex: 'saturn_ring', w0: 38.90, wd: 810.7939024, name: 'Сатурн', radiusKm: 58232, rotH: 10.656, pole: [40.59, 83.54], type: 5, col1: [0.9, 0.82, 0.64], col2: [0.76, 0.64, 0.45], col3: [0.7, 0.62, 0.5],
       bands: 16, turb: 0.5, feature: 3, ring: [1.11, 2.35, 1.0, 1], ringCol: [0.8, 0.72, 0.6], atmo: [0.85, 0.78, 0.6, 0.01], atmoDens: 2,
       info: 'Газовый гигант со знаменитыми кольцами из водяного льда шириной ~280 000 км и толщиной порядка 10 м.', mass: '95.2 M⊕', period: '29.46 лет' },
-    { id: 'uranus', name: 'Уран', radiusKm: 25362, rotH: -17.24, pole: [257.31, -15.18], type: 6, col1: [0.66, 0.85, 0.88], col2: [0.58, 0.79, 0.84], col3: [0.6, 0.78, 0.82],
-      bands: 10, turb: 0.15, feature: 0, ring: [1.6, 2.05, 0.8, 2], ringCol: [0.35, 0.35, 0.35], atmo: [0.6, 0.85, 0.95, 0.02], atmoDens: 3,
+    { id: 'uranus', tex: 'uranus', w0: 203.81, wd: -501.1600928, name: 'Уран', radiusKm: 25362, rotH: -17.24, pole: [257.31, -15.18], type: 6, col1: [0.66, 0.85, 0.88], col2: [0.58, 0.79, 0.84], col3: [0.6, 0.78, 0.82],
+      bands: 10, turb: 0.15, feature: 0, ring: [1.6, 4.05, 1.0, 2], ringCol: [0.5, 0.5, 0.52], atmo: [0.6, 0.85, 0.95, 0.02], atmoDens: 3,
       info: 'Ледяной гигант, «лежащий на боку»: ось наклонена на 98°. Метан придаёт атмосфере голубовато-зелёный цвет.', mass: '14.5 M⊕', period: '84 года' },
-    { id: 'neptune', name: 'Нептун', radiusKm: 24622, rotH: 16.11, pole: [299.36, 43.46], type: 7, col1: [0.33, 0.5, 0.92], col2: [0.22, 0.36, 0.8], col3: [0.3, 0.45, 0.85],
+    { id: 'neptune', tex: 'neptune', w0: 249.978, wd: 541.1397757, name: 'Нептун', radiusKm: 24622, rotH: 16.11, pole: [299.36, 43.46], type: 7, col1: [0.33, 0.5, 0.92], col2: [0.22, 0.36, 0.8], col3: [0.3, 0.45, 0.85],
       bands: 12, turb: 0.6, feature: 2, atmo: [0.35, 0.5, 1.0, 0.02], atmoDens: 3,
       info: 'Самая дальняя планета; сильнейшие ветра в Солнечной системе (до 2100 км/ч) и тёмные вихри.', mass: '17.1 M⊕', period: '164.8 лет' },
+    { id: 'pluto', name: 'Плутон', radiusKm: 1188.3, rotH: -153.2935, pole: [132.993, -6.163], type: 16, bump: 3, tex: 'pluto', texH: 0.1, w0: 302.695, wd: 56.3625225,
+      atmo: [0.55, 0.7, 1.0, 0.01], atmoDens: 0.4, dwarf: true, desc: 'Карликовая планета',
+      info: 'Карликовая планета пояса Койпера. «Сердце» — равнина Спутника из азотного льда; тонкая голубая дымка атмосферы (New Horizons, 2015).', mass: '0.0022 M⊕', period: '248 лет' },
   ];
 
   // Спутники: a (км), период (сут), радиус (км)
   const MOONS = [
-    { id: 'moon', name: 'Луна', parent: 'earth', aKm: 384400, periodD: 27.3217, radiusKm: 1737.4, type: 8, incl: 5.145, bump: 3, info: 'Единственный естественный спутник Земли. Тёмные пятна — базальтовые «моря».' },
-    { id: 'io', name: 'Ио', parent: 'jupiter', aKm: 421700, periodD: 1.769, radiusKm: 1821.6, type: 9, bump: 3, info: 'Самое вулканически активное тело Солнечной системы.' },
-    { id: 'europa', name: 'Европа', parent: 'jupiter', aKm: 671034, periodD: 3.551, radiusKm: 1560.8, type: 10, bump: 3, info: 'Ледяная кора скрывает подлёдный океан — кандидат на поиск жизни.' },
-    { id: 'ganymede', name: 'Ганимед', parent: 'jupiter', aKm: 1070412, periodD: 7.155, radiusKm: 2634.1, type: 0, col1: [0.45, 0.42, 0.38], col2: [0.7, 0.67, 0.62], bump: 5, info: 'Крупнейший спутник в Солнечной системе, больше Меркурия.' },
-    { id: 'callisto', name: 'Каллисто', parent: 'jupiter', aKm: 1882709, periodD: 16.689, radiusKm: 2410.3, type: 0, col1: [0.25, 0.22, 0.2], col2: [0.5, 0.47, 0.42], bump: 7, info: 'Одна из самых кратерированных поверхностей.' },
-    { id: 'titan', name: 'Титан', parent: 'saturn', aKm: 1221870, periodD: 15.945, radiusKm: 2574.7, type: 11, atmo: [0.95, 0.6, 0.25, 0.12], atmoDens: 7, info: 'Плотная азотная атмосфера, метановые моря и дожди.' },
-    { id: 'enceladus', name: 'Энцелад', parent: 'saturn', aKm: 237948, periodD: 1.37, radiusKm: 252.1, type: 16, bump: 3, info: 'Гейзеры водяного льда бьют из «тигровых полос» южного полюса.' },
+    { id: 'moon', tex: 'moon', texH: 0.14, name: 'Луна', parent: 'earth', aKm: 384400, periodD: 27.3217, radiusKm: 1737.4, type: 8, incl: 5.145, bump: 3, info: 'Единственный естественный спутник Земли. Тёмные пятна — базальтовые «моря».' },
+    { id: 'io', tex: 'io', texH: 0.08, name: 'Ио', parent: 'jupiter', aKm: 421700, periodD: 1.769, radiusKm: 1821.6, type: 9, bump: 3, info: 'Самое вулканически активное тело Солнечной системы.' },
+    { id: 'europa', tex: 'europa', texH: 0.08, name: 'Европа', parent: 'jupiter', aKm: 671034, periodD: 3.551, radiusKm: 1560.8, type: 10, bump: 3, info: 'Ледяная кора скрывает подлёдный океан — кандидат на поиск жизни.' },
+    { id: 'ganymede', tex: 'ganymede', texH: 0.1, name: 'Ганимед', parent: 'jupiter', aKm: 1070412, periodD: 7.155, radiusKm: 2634.1, type: 0, col1: [0.45, 0.42, 0.38], col2: [0.7, 0.67, 0.62], bump: 5, info: 'Крупнейший спутник в Солнечной системе, больше Меркурия.' },
+    { id: 'callisto', tex: 'callisto', texH: 0.12, name: 'Каллисто', parent: 'jupiter', aKm: 1882709, periodD: 16.689, radiusKm: 2410.3, type: 0, col1: [0.25, 0.22, 0.2], col2: [0.5, 0.47, 0.42], bump: 7, info: 'Одна из самых кратерированных поверхностей.' },
+    { id: 'titan', tex: 'titan', name: 'Титан', parent: 'saturn', aKm: 1221870, periodD: 15.945, radiusKm: 2574.7, type: 11, atmo: [0.95, 0.6, 0.25, 0.12], atmoDens: 7, info: 'Плотная азотная атмосфера, метановые моря и дожди.' },
+    { id: 'enceladus', tex: 'enceladus', texH: 0.1, name: 'Энцелад', parent: 'saturn', aKm: 237948, periodD: 1.37, radiusKm: 252.1, type: 16, bump: 3, info: 'Гейзеры водяного льда бьют из «тигровых полос» южного полюса.' },
     { id: 'rhea', name: 'Рея', parent: 'saturn', aKm: 527108, periodD: 4.518, radiusKm: 763.8, type: 0, col1: [0.6, 0.6, 0.6], col2: [0.8, 0.8, 0.78], bump: 6, info: 'Второй по величине спутник Сатурна.' },
-    { id: 'triton', name: 'Тритон', parent: 'neptune', aKm: 354759, periodD: -5.877, radiusKm: 1353.4, type: 16, bump: 3, info: 'Обращается в обратную сторону; азотные гейзеры.' },
+    { id: 'triton', tex: 'triton', texH: 0.08, name: 'Тритон', parent: 'neptune', aKm: 354759, periodD: -5.877, radiusKm: 1353.4, type: 16, bump: 3, info: 'Обращается в обратную сторону; азотные гейзеры.' },
     { id: 'titania', name: 'Титания', parent: 'uranus', aKm: 435910, periodD: 8.706, radiusKm: 788.4, type: 0, col1: [0.45, 0.43, 0.42], col2: [0.62, 0.6, 0.58], bump: 6, info: 'Крупнейший спутник Урана.' },
   ];
 
@@ -108,6 +112,7 @@
       const b = Object.assign({}, p, { kind: 'planet', system: sys, parent: null, radius: p.radiusKm * KM_LY, frame: bodyFrame(pole), pole: v3.norm(pole), poleRaDec: p.pole, seed: (MW.rng.hashStr(p.id) % 1000) / 1000 });
       b.orbitFn = (jd) => MW.coords.eclToGal(keplerPos(EL[p.id], jd)).map((c) => c * AU_LY);
       b.aAU = EL[p.id][0];
+      if (p.wd !== undefined) b.spinFn = (jd) => (p.w0 + p.wd * (jd - 2451545.0)) * DEG;
       if (p.id === 'earth') {
         // реальная ориентация Земли: x — к точке весеннего равноденствия, поворот = угол вращения Земли (ERA)
         const z = MW.coords.NCP, x = v3.norm(MW.m3.mulVec(MW.coords.EQ2GAL, [1, 0, 0]));

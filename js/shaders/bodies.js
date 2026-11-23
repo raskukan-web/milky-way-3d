@@ -42,8 +42,9 @@ void main(){
   float limbR = 1.0;
   float puls = 1.0;
   if (u_kind == 3){
-    puls = 1.0 + 0.05 * sin(t * 0.25 + u_seed * 40.0) + 0.03 * sin(t * 0.61 + u_seed * 13.0);
-    limbR = puls * (1.0 + 0.045 * fbm(dl * 2.2 + SP + vec3(0.0, 0.0, t * 0.04), 4));
+    // пульсация и неровность края в ~5 раз слабее: звезда — шар, а не бесформенный комок
+    puls = 1.0 + 0.011 * sin(t * 0.25 + u_seed * 40.0) + 0.006 * sin(t * 0.61 + u_seed * 13.0);
+    limbR = puls * (1.0 + 0.009 * fbm(dl * 2.2 + SP + vec3(0.0, 0.0, t * 0.04), 4));
   }
   float x = b / (u_r * limbR);
   vec3 base = blackbody(u_temp);
@@ -117,18 +118,27 @@ void main(){
       float grav = 1.0 - u_flat * 1.4 * (1.0 - nN.z * nN.z);     // фон Цейпель: полюса горячее и ярче
       I *= grav; Tk *= mix(1.0, grav, 0.5);
     } else if (u_kind == 3){
-      // красный гигант: ячейки размером в треть звезды, тёмные межъячеечные провалы, горячие всплывающие пятна
+      // красный гигант: гигантские конвективные ячейки (треть звезды), внутри — многослойная кипящая
+      // грануляция и раскалённые волокна плазмы. HDR: ядра ячеек сияют бело-золотым, межъячеечные
+      // провалы уходят в глубокий багровый.
       float tt = t * 0.02;
-      vec3 q = n * u_gran;
-      vec2 w = worley(q + SP + vec3(0.0, 0.0, tt));
-      float cells = smoothstep(0.0, 0.75, w.y - w.x);
-      vec2 w2 = worley(n * u_gran * 3.5 + SP.zxy + vec3(tt * 2.0, 0.0, 0.0));
-      float cells2 = smoothstep(0.0, 0.6, w2.y - w2.x);
-      float turb = fbm(n * 2.5 + SP + vec3(0.0, tt, tt * 0.5), 5);
-      float hot = smoothstep(0.35, 0.8, fbm(n * 1.3 + SP.yzx + vec3(tt * 0.4), 4));
-      I = 0.22 + 0.75 * cells + 0.18 * cells2 + 0.35 * turb + 0.6 * hot * cells;
-      Tk *= 0.86 + 0.16 * cells + 0.12 * hot;
-      ld = pow(mu, 0.75);
+      // течение плазмы: координаты закручиваются и стекают к границам ячеек
+      vec3 wv = vec3(fbm(n * 5.0 + SP + vec3(tt * 3.0, 0.0, 0.0), 3), fbm(n * 5.0 + SP.yzx - vec3(0.0, tt * 3.0, 0.0), 3), fbm(n * 5.0 + SP.zxy + vec3(0.0, 0.0, tt * 3.0), 3));
+      vec3 wp = n + 0.045 * wv;
+      vec2 w = worley(n * u_gran + SP + vec3(0.0, 0.0, tt));
+      float big = smoothstep(0.0, 0.85, w.y - w.x);                       // крупные ячейки — мягкая модуляция
+      vec2 w2 = worley(wp * u_gran * 4.5 + SP.zxy + vec3(tt * 4.0, 0.0, 0.0));
+      float mid = smoothstep(0.0, 0.55, w2.y - w2.x);                     // средние ячейки
+      vec2 w3 = worley(wp * u_gran * 16.0 + SP.yzx + vec3(0.0, t * 0.25, 0.0));
+      float fine = smoothstep(0.0, 0.45, w3.y - w3.x);                    // мелкая кипящая грануляция
+      float fil = pow(ridged(wp * u_gran * 7.0 + SP + vec3(tt * 6.0), 4), 4.0);   // раскалённые волокна
+      float boil = fbm(wp * u_gran * 40.0 + SP + vec3(t * 0.2), 3);         // самая мелкая рябь
+      float heat = (0.35 + 0.65 * big) * (0.55 + 0.45 * mid) * (0.75 + 0.25 * fine) + 0.4 * fil * big + 0.05 * boil;
+      heat = clamp(heat, 0.0, 1.3);
+      I = 0.12 + 2.6 * pow(heat, 1.6);                                    // обычная поверхность ~1, ядра до 3 (HDR), провалы ~0.25
+      Tk *= 0.68 + 0.6 * heat;                                            // ядра ~1.4×T (бело-золотые), провалы ~0.75×T
+      spotK = smoothstep(0.3, 0.1, heat) * 0.85;                          // багровые межъячеечные провалы
+      ld = pow(mu, 0.6);
       I *= puls * puls;
     } else {
       // белый карлик: идеально гладкий, ослепительный
@@ -200,7 +210,7 @@ void main(){
   // пыль оболочки гиганта частично закрывает диск
   if (u_kind == 3 && alpha > 0.0){
     float dust = smoothstep(0.15, 0.7, fbm(dl * 3.0 + SP * 1.3 + vec3(0.0, 0.0, t * 0.004), 4));
-    col *= 1.0 - 0.3 * dust;
+    col *= 1.0 - 0.1 * dust;
   }
   o = vec4(max(col, vec3(0.0)), alpha);
 }`;
@@ -222,14 +232,33 @@ uniform vec3 u_ringCol;
 uniform sampler2D u_earth;
 uniform vec4 u_exo;    // экзопланеты: x стиль (1 нептун/гигант, 2 горячий юпитер, 3 лавовый мир, 4 каменный), y тепловое свечение, z длина хвоста (R), w ободок
 uniform vec3 u_rim;    // цвет атмосферного ободка рассеяния
+// реальные карты поверхностей: u_tex — цвет (sRGB→линейный), u_aux — служебная (Земля: R облака, G океаны,
+// B ночные огни; Венера — радарная карта поверхности), u_nrm — нормали Земли, u_ringTex — профиль колец Сатурна
+uniform sampler2D u_tex, u_aux, u_nrm, u_ringTex;
+uniform vec4 u_texP;   // x вес карты (0…1, плавное появление), y уровень мип-карты, z масштаб высоты из яркости, w вес служебной карты
+uniform vec4 u_texQ;   // x высота камеры над поверхностью (в R), y вес текстуры колец, z,w радиусы краёв текстуры колец (в R)
+uniform float u_nrmK, u_hazeFloor;
 out vec4 o;
 vec3 SP;
+float gLod = 0.0;      // уровень мип-карты в этом пикселе (у лимба — грубее: поверхность видна под углом)
+float gRingW = 0.0;    // ширина пикселя в плоскости колец (в R) — для сглаживания узких колец
 vec3 gL;               // направление на звезду в системе планеты
 float gBand;           // 0..1 — светлая/тёмная полоса (для свечения ночной стороны)
 
 vec2 eqUV(vec3 n){ return vec2(atan(n.y, n.x) / 6.2831853 + 0.5, 0.5 - asin(clamp(n.z, -1.0, 1.0)) / 3.14159265); }
 vec3 earthTex(vec3 n){ return textureLod(u_earth, eqUV(n), u_earthLod).rgb; }
+vec3 texC(vec3 n){ return textureLod(u_tex, eqUV(n), gLod).rgb; }
+vec4 texA(vec3 n){ return textureLod(u_aux, eqUV(n), gLod); }
 float earthLand(vec3 n){
+#if FAM == 2
+  // с реальной картой — точная береговая линия из маски океанов
+  if (u_texP.w > 0.0){
+    float lm = 1.0 - smoothstep(0.35, 0.65, texA(n).g);
+    if (u_texP.w > 0.999) return lm;
+    float r0 = earthTex(n).r;
+    return mix(smoothstep(0.44, 0.56, r0 + 0.13 * fbm(n * 16.0 + SP, 4)), lm, u_texP.w);
+  }
+#endif
   float r = earthTex(n).r;
   float nz = 0.13 * fbm(n * 16.0 + SP, 4) + 0.05 * fbm(n * 64.0, 3);
   return smoothstep(0.44, 0.56, r + nz);
@@ -240,6 +269,7 @@ float craters(vec3 n, float f, float r){
   return 0.5 * exp(-pow((d - r) / (r * 0.3), 2.0)) - 0.9 * smoothstep(r, r * 0.15, d);
 }
 float H0(vec3 n);
+float H0p(vec3 n);
 // сеть лавовых рек: ridged-шум с искажением координат
 float lavaRiv(vec3 n){
   vec3 w = vec3(fbm(n * 2.5 + SP, 4), fbm(n * 2.5 + SP.yzx + 5.0, 4), fbm(n * 2.5 + SP.zxy + 9.0, 4));
@@ -260,6 +290,13 @@ float H(vec3 n){
   return h;
 }
 float H0(vec3 n){
+  if (u_texP.x > 0.0 && u_texP.z > 0.0){
+    float ht = u_texP.z * dot(texC(n), vec3(0.3, 0.59, 0.11));
+    return u_texP.x > 0.999 ? ht : mix(H0p(n), ht, u_texP.x);
+  }
+  return H0p(n);
+}
+float H0p(vec3 n){
 #if FAM == 0
   if (u_type == 0 || u_type == 8){
     return 0.3 * fbm(n * 3.0 + SP, u_oct) + 0.3 * craters(n, 5.0, 0.33) + 0.18 * craters(n, 13.0, 0.3)
@@ -318,12 +355,12 @@ vec3 heightAndBump(vec3 n, out float h0){
     for (int k = 3; k < 5; k++){
       float dk = e * (k == 3 ? 5.0 : 16.0);
       float slope = (hs[k] - h0) * u_bumpK * 0.01 / dk;
-      gShadow = min(gShadow, smoothstep(-0.3, 0.3, (tanE - slope) / max(tanE, 0.06)));
+      gShadow = min(gShadow, smoothstep(-0.18, 0.18, (tanE - slope) / max(tanE, 0.06)));
     }
   }
   vec3 gv = u_bumpK * ((hs[1] - h0) * t1 + (hs[2] - h0) * t2) / e * 0.01;
   float gl = length(gv);
-  if (gl > 0.55) gv *= 0.55 / gl;     // мягкое ограничение крутизны — без «чернильных» теней в кратерах
+  if (gl > 0.8) gv *= 0.8 / gl;       // мягкое ограничение крутизны — без «чернильных» теней в кратерах
   return normalize(n - gv);
 }
 vec3 gasBands(vec3 n){
@@ -454,9 +491,78 @@ vec3 exoBands(vec3 n){
   vec2 wp = worley(n * 22.0 + SP);
   c = mix(c, mix(u_col3 * 0.7, u_col2 * 0.6, smoothstep(0.1, 0.5, wp.x)), pol * 0.7);
   float lu = dot(c, vec3(0.3, 0.59, 0.11));
-  return max(mix(vec3(lu), c, 1.3), 0.0);
+  // насыщенные, контрастные цвета (без «серости»)
+  c = max(mix(vec3(lu), c, 1.6), 0.0);
+  return pow(c, vec3(1.12)) * 1.06;
+}
+vec3 albedoP(vec3 n, float h, out float spec, out vec3 emis);
+vec3 sat3(vec3 c, float k){ float l = dot(c, vec3(0.3, 0.59, 0.11)); return max(vec3(l) + (c - vec3(l)) * k, 0.0); }
+// цвет по реальной карте с поправками по типу тела
+vec3 texAlbedo(vec3 n, float h, out float spec, out vec3 emis){
+  spec = 0.0; emis = vec3(0.0);
+  vec3 c = texC(n);
+#if FAM == 2
+  // Земля: Blue Marble + маска океанов (блик) + ночные огни городов (Black Marble)
+  vec4 ax = texA(n);
+  float ocean = smoothstep(0.35, 0.65, ax.g) * u_texP.w;
+  float seaIce = smoothstep(0.93, 0.97, abs(n.z));
+  spec = ocean * (1.0 - seaIce);
+  float lights = pow(max(ax.b, 0.0), 2.2) * u_texP.w;
+  emis = vec3(1.0, 0.62, 0.3) * lights * 1.6;
+  // мелкая неоднородность суши при подлёте в упор (поля, леса, осыпи)
+  c *= 1.0 + u_micro * (1.0 - ocean) * 0.18 * fbm(n * 900.0 + SP, 3);
+  return sat3(c, 1.12);
+#elif FAM == 3
+  float lat = asin(clamp(n.z, -1.0, 1.0));
+  if (u_type == 1){
+    // Венера: облака серной кислоты; ниже облачного слоя (~50 км) видна радарная карта поверхности
+    c = sat3(c, 1.25);
+    float under = (1.0 - smoothstep(0.004, 0.012, u_texQ.x)) * u_texP.w;
+    vec3 surf = textureLod(u_aux, eqUV(n), gLod).rgb * vec3(1.0, 0.7, 0.42) * 0.55;
+    return mix(c, surf, under);
+  }
+  if (u_type == 11){
+    // Титан: в видимом свете — оранжевая дымка; карта Cassini (ИК) проступает слабо, у поверхности — отчётливо
+    float l = dot(c, vec3(0.3, 0.59, 0.11));
+    vec3 haze = mix(vec3(0.85, 0.58, 0.24), vec3(0.72, 0.45, 0.16), smoothstep(-0.4, 0.4, sin(lat * 9.0) + 0.5 * fbm(n * 3.0 + SP, 4)));
+    float clear = 0.22 + 0.7 * (1.0 - smoothstep(0.01, 0.08, u_texQ.x));
+    return mix(haze, vec3(0.95, 0.68, 0.35) * l * 1.3, clear);
+  }
+  if (u_type == 6){
+    // Уран: насыщенный лазурный диск, едва заметные полосы и светлый полярный «капюшон»
+    float lu = dot(c, vec3(0.3, 0.59, 0.11));
+    c = mix(sat3(c, 1.3), vec3(0.1, 0.56, 1.0) * lu * 2.1, 0.85);
+    float bnd = sin(lat * 22.0 + 0.6 * fbm(n * vec3(3.0, 3.0, 12.0) + SP, 3));
+    c *= 0.95 + 0.05 * bnd;
+    c = mix(c, vec3(0.8, 0.95, 0.97), smoothstep(0.55, 0.95, n.z) * 0.35);
+    return c;
+  }
+  if (u_type == 7) return sat3(c, 1.5) * vec3(0.8, 0.95, 1.12);   // Нептун: глубокий кобальтовый синий
+  if (u_type == 4 || u_type == 5) return sat3(c, 1.2);            // Юпитер, Сатурн: кремово-охристые пояса
+  return c;
+#else
+  if (u_type == 9){
+    // Ио: тусклые горячие точки активных вулканов на ночной стороне
+    vec2 w = worley(n * 7.0 + SP);
+    emis = vec3(1.0, 0.35, 0.08) * smoothstep(0.035, 0.0, w.x) * 0.35;
+  }
+  // мелкая зернистость реголита при подлёте (поверх реальной карты)
+  c *= 1.0 + u_micro * 0.14 * fbm(n * 700.0 + SP, 3);
+  return sat3(c, 1.08);
+#endif
 }
 vec3 albedo(vec3 n, float h, out float spec, out vec3 emis){
+  spec = 0.0; emis = vec3(0.0);
+  vec3 pc = vec3(0.0);
+  if (u_texP.x < 0.999) pc = albedoP(n, h, spec, emis);
+  if (u_texP.x > 0.0){
+    float sp2; vec3 em2;
+    vec3 tc = texAlbedo(n, h, sp2, em2);
+    pc = mix(pc, tc, u_texP.x); spec = mix(spec, sp2, u_texP.x); emis = mix(emis, em2, u_texP.x);
+  }
+  return pc;
+}
+vec3 albedoP(vec3 n, float h, out float spec, out vec3 emis){
   spec = 0.0; emis = vec3(0.0);
   float lat = n.z, alat = abs(n.z);
 #if FAM == 0
@@ -606,13 +712,36 @@ vec3 albedo(vec3 n, float h, out float spec, out vec3 emis){
 float cloudDens(vec3 n){
   float a = u_cloudRot;
   vec3 m = vec3(cos(a) * n.x - sin(a) * n.y, sin(a) * n.x + cos(a) * n.y, n.z);
+#if FAM == 2
+  if (u_texP.w > 0.999){
+    // реальные облака (медленно дрейфуют) + мелкие клочья при подлёте
+    float c0 = texA(m).r;
+    return smoothstep(0.12, 0.85, c0 + u_micro * 0.12 * fbm(m * 300.0 + SP, 3));
+  }
+#endif
   vec3 w = vec3(fbm(m * 2.0 + SP + 7.0, 3), fbm(m * 2.0 + SP + 13.0, 3), fbm(m * 2.0 + SP + 3.0, 3));
   float f = fbm(m * 3.0 + w * 0.8 + SP, max(u_oct, 5));
   float belt = 0.08 * cos(n.z * 9.0);
   return smoothstep(0.55 - u_par.z, 0.95 - u_par.z, f * 0.5 + 0.5 + belt);
 }
+// узкое кольцо с сохранением «эквивалентной ширины»: если кольцо уже пикселя, оно расплывается
+// на пиксель с пропорционально меньшей плотностью — тонкая линия без мерцания и пропаданий
+float narrowRing(float r, float r0, float w, float tau){
+  float s = max(w, gRingW * 0.7);
+  return tau * (w / s) * exp(-pow((r - r0) / s, 2.0));
+}
 float ringDensity(float r){
   if (u_ring.w < 1.5){
+    float dT = 0.0;
+    if (u_texQ.y > 0.0){
+      // реальный радиальный профиль колец Сатурна (C, B, щель Кассини, A, щель Энке)
+      float x = (r - u_texQ.z) / (u_texQ.w - u_texQ.z);
+      float lod = log2(max(gRingW / ((u_texQ.w - u_texQ.z) / 4096.0), 1.0));
+      dT = (x > 0.0 && x < 1.0) ? textureLod(u_ringTex, vec2(x, 0.5), lod).a : 0.0;
+      // кольцо F (за пределами текстуры)
+      dT += narrowRing(r, 2.326, 0.0012, 0.5);
+      if (u_texQ.y > 0.999) return clamp(dT, 0.0, 1.0);
+    }
     float d = 0.0;
     d += smoothstep(1.239, 1.26, r) * (1.0 - smoothstep(1.51, 1.527, r)) * 0.13;
     d += smoothstep(1.52, 1.535, r) * (1.0 - smoothstep(1.945, 1.951, r)) * (0.72 + 0.2 * sin(r * 180.0));
@@ -620,12 +749,17 @@ float ringDensity(float r){
     d += smoothstep(2.02, 2.03, r) * (1.0 - smoothstep(2.262, 2.27, r)) * 0.55 * smoothstep(0.0025, 0.0035, abs(r - 2.214));
     d += exp(-pow((r - 2.326) / 0.004, 2.0)) * 0.5;
     d *= 0.75 + 0.5 * hash12(vec2(floor(r * 3000.0), 1.0));
-    return clamp(d, 0.0, 1.0);
+    return clamp(mix(d, dT, u_texQ.y), 0.0, 1.0);
   } else if (u_ring.w < 2.5){
-    float d = exp(-pow((r - 1.637) / 0.004, 2.0)) + exp(-pow((r - 1.652) / 0.003, 2.0)) + exp(-pow((r - 1.666) / 0.003, 2.0))
-            + exp(-pow((r - 1.75) / 0.003, 2.0)) + exp(-pow((r - 1.79) / 0.003, 2.0)) + exp(-pow((r - 1.84) / 0.003, 2.0))
-            + exp(-pow((r - 2.0) / 0.008, 2.0)) * 1.2;
-    return clamp(d * 0.6, 0.0, 1.0);
+    // Уран (R = 25 559 км): узкие кольца 6, 5, 4, α, β, η, γ, δ, λ, ε по реальным радиусам; ширина
+    // визуально увеличена в ~4 раза, чтобы кольца читались (как на длинных экспозициях Voyager 2 / JWST)
+    float d = narrowRing(r, 1.6369, 0.0004, 0.5) + narrowRing(r, 1.6524, 0.0004, 0.5) + narrowRing(r, 1.6656, 0.0004, 0.5)
+            + narrowRing(r, 1.7496, 0.0011, 0.6) + narrowRing(r, 1.7865, 0.0013, 0.55) + narrowRing(r, 1.8458, 0.0004, 0.45)
+            + narrowRing(r, 1.8634, 0.0006, 0.7) + narrowRing(r, 1.8898, 0.0009, 0.6) + narrowRing(r, 1.9572, 0.0004, 0.35)
+            + narrowRing(r, 2.0012, 0.0045, 0.95);
+    // слабые пылевые кольца ν (красноватое) и μ (голубое)
+    d += 0.035 * smoothstep(2.58, 2.66, r) * smoothstep(2.74, 2.66, r) + 0.025 * exp(-pow((r - 3.72) / 0.22, 2.0));
+    return clamp(d, 0.0, 1.0);
   }
   float x = (r - u_ring.x) / (u_ring.y - u_ring.x);
   float d = 0.6 + 0.4 * sin(x * 37.0 + u_seed * 20.0) * sin(x * 11.0 + u_seed * 5.0);
@@ -639,7 +773,18 @@ vec4 shadeRing(float r, vec3 p, vec3 rd, vec3 L){
   if (d <= 0.001) return vec4(0.0);
   vec3 col = u_ringCol;
   if (u_ring.w < 1.5) col = r < 1.527 ? vec3(0.55, 0.5, 0.44) : (r < 1.95 ? vec3(0.86, 0.78, 0.64) : vec3(0.78, 0.73, 0.65));
+  if (u_ring.w > 1.5 && u_ring.w < 2.5){
+    // пылевые кольца Урана: ν — красноватое, μ — голубое
+    if (r > 2.5 && r < 2.8) col = vec3(0.75, 0.55, 0.45);
+    if (r > 3.2) col = vec3(0.45, 0.65, 1.0);
+  }
   col *= 0.85 + 0.3 * hash12(vec2(floor(r * 600.0), 3.0));
+  if (u_ring.w < 1.5 && u_texQ.y > 0.0){
+    float x = (r - u_texQ.z) / (u_texQ.w - u_texQ.z);
+    float lod = log2(max(gRingW / ((u_texQ.w - u_texQ.z) / 4096.0), 1.0));
+    vec3 tc = textureLod(u_ringTex, vec2(clamp(x, 0.0, 1.0), 0.5), lod).rgb * 2.2;
+    col = mix(col, (x > 0.0 && x < 1.0) ? tc : vec3(0.7, 0.66, 0.6), u_texQ.y);
+  }
   vec2 hs = raySphere(p, L, vec3(0.0), u_r);
   float sh = (hs.x < hs.y && hs.y > 0.0) ? 0.03 : 1.0;
   float sunSide = dot(L, u_pole), viewSide = dot(-rd, u_pole);
@@ -673,12 +818,25 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
   vec3 Ll = u_bodyRot * L;
   vec3 V = u_bodyRot * (-rd);
   gL = Ll;
+  // мип-уровень карты: у лимба поверхность видна под углом — пиксель накрывает больше текселей
+  gLod = u_texP.y + 0.6 * log2(1.0 / max(dot(n, V), 0.1));
   float h;
   vec3 N = heightAndBump(n, h);
+#if FAM == 2
+  // Земля: реальный рельеф горных хребтов из карты нормалей (усилен — исходная карта очень пологая)
+  if (u_nrmK > 0.0){
+    vec3 nm = textureLod(u_nrm, eqUV(n), gLod).xyz * 2.0 - 1.0;
+    vec3 E = vec3(-n.y, n.x, 0.0);
+    E = length(E) > 1e-5 ? normalize(E) : vec3(1.0, 0.0, 0.0);
+    vec3 Nn = cross(n, E);
+    N = normalize(N + (nm.x * E + nm.y * Nn) * 4.0 * u_nrmK);
+  }
+#endif
   // альбедо; у газовых экзо-гигантов ещё три пробы — рельеф облаков (яркие гряды выше тёмных поясов)
   // и микротени к звезде. albedo() в цикле — встраивается один раз.
   vec3 alb = vec3(0.0); float spec = 0.0; vec3 emis = vec3(0.0);
-  bool cRel = u_exo.x > 0.5 && u_exo.x < 2.5;
+  // рельеф облаков: экзо-гиганты и газовые гиганты Солнечной системы с реальной картой
+  bool cRel = (u_exo.x > 0.5 && u_exo.x < 2.5) || (u_texP.x > 0.5 && (u_type == 4 || u_type == 5 || u_type == 7));
   float cloudSh = 1.0;
   {
     vec3 t1 = normalize(cross(n, abs(n.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
@@ -697,12 +855,12 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
       lum[i] = dot(a, vec3(0.3, 0.59, 0.11));
     }
     if (cRel){
-      vec3 gv = ((lum[1] - lum[0]) * t1 + (lum[2] - lum[0]) * t2) / e * 0.01;
+      vec3 gv = ((lum[1] - lum[0]) * t1 + (lum[2] - lum[0]) * t2) / e * 0.016;
       float gl = length(gv);
-      if (gl > 0.35) gv *= 0.35 / gl;
+      if (gl > 0.5) gv *= 0.5 / gl;
       N = normalize(n - gv);
       float sinE = dot(n, Ll);
-      cloudSh = 1.0 - 0.55 * smoothstep(0.015, 0.12, lum[3] - lum[0]) * (1.0 - smoothstep(0.05, 0.55, sinE));
+      cloudSh = 1.0 - 0.7 * smoothstep(0.012, 0.1, lum[3] - lum[0]) * (1.0 - smoothstep(0.05, 0.55, sinE));
     }
   }
   float ndl = dot(N, Ll), ndlS = dot(n, Ll);
@@ -712,16 +870,16 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
     float ls = diff / (diff + ndv + 1e-3);
     diff = mix(diff, ls * 1.6, 0.5);
   }
-  diff *= smoothstep(-0.03, 0.06, ndlS);
+  diff *= smoothstep(-0.015, 0.035, ndlS);
   // у экзо-гигантов глубокое потемнение к терминатору; тени облачных гряд и рельефа
   if (cRel){
     // матовые облака: смесь Ламберта и Ломмеля–Зеелигера — освещённость ровнее по диску, без яркого «блика»
     // в центре; у терминатора — по-прежнему глубокое потемнение
     float ls = 2.0 * diff / (diff + ndv + 0.05);
     diff = mix(diff, ls * smoothstep(0.0, 0.25, diff), 0.5) * 0.78;
-    diff = pow(max(diff, 0.0), 1.15);
+    diff = pow(max(diff, 0.0), 1.3);
   }
-  diff *= cloudSh * mix(1.0, gShadow, 0.9);
+  diff *= cloudSh * gShadow;
   float rs = 1.0;
   if (u_ring.w > 0.5){
     vec3 Pw = nW * u_r;
@@ -742,7 +900,8 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
     vec3 Hh = normalize(Ll + V);
     float fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
     float nh = max(dot(n, Hh), 0.0);
-    lit += spec * (pow(nh, 600.0) * 2.5 + pow(nh, 60.0) * 0.05) * (0.3 + fres) * smoothstep(0.0, 0.1, ndlS) * (1.0 - cl);
+    // солнечный блик: резкое ядро + широкое сияние ряби волн (как на снимках Земли с орбиты)
+    lit += spec * (pow(nh, 900.0) * 7.0 + pow(nh, 140.0) * 0.45 + pow(nh, 24.0) * 0.04) * (0.3 + fres) * smoothstep(0.0, 0.1, ndlS) * (1.0 - cl);
   }
   lit = mix(lit, vec3(0.95) * smoothstep(-0.05, 0.3, ndlS) * max(ndlS + 0.05, 0.0), cl);
   lit *= u_sunCol * rs;
@@ -796,10 +955,15 @@ void main(){
     vec3 nHit = normalize(cpv - rd * zz * u_r);
     pc = shadePlanet(nHit, rd, L);
     // Френель: в центре диска дымка почти не видна (облака не «выжигаются»), к краю — плотный ободок
-    if (u_exo.x > 0.5) limbF = 0.06 + 0.94 * pow(1.0 - max(dot(nHit, -rd), 0.0), 3.0);
+    limbF = mix(u_exo.x > 0.5 ? 0.06 : u_hazeFloor, 1.0, pow(1.0 - max(dot(nHit, -rd), 0.0), 3.0));
   }
   float tR = 1e20;
   vec4 ringC = vec4(0.0);
+  if (u_ring.w > 0.5){
+    float dn0 = dot(rd, u_pole);
+    float rr = length(rd * (dot(u_c, u_pole) / (abs(dn0) > 1e-7 ? dn0 : 1e-7)) - u_c) / u_r;
+    gRingW = min(fwidth(rr), 0.5);
+  }
   if (u_ring.w > 0.5){
     float dn = dot(rd, u_pole);
     if (abs(dn) > 1e-7){

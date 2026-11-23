@@ -6,6 +6,9 @@
      (ESO / Serge Brunier, eso0932a, CC BY 4.0; запасной вариант — NASA SVS Deep Star Maps 2020).
   2. Звёздный каталог HYG (Hipparcos + Yale BSC + Gliese) — звёзды ярче 7.5m.
   3. OpenNGC — все 110 объектов Мессье и крупнейшие объекты NGC/IC.
+  4. Карты поверхностей планет и спутников (Solar System Scope CC BY 4.0, NASA/USGS, New Horizons):
+     python tools/fetch_data.py tex            — все карты
+     python tools/fetch_data.py tex mars pluto — только выбранные
 
 Результат — JS-файлы в js/data/ (подключаются <script>, поэтому работают даже с file://)
 и исходники в assets/.
@@ -403,6 +406,191 @@ def fetch_exoplanets():
     return npl
 
 
+# ---------------------------------------------------------------------------------------------
+#  Реальные карты поверхностей планет и спутников (равнопромежуточная проекция, долгота −180…180,
+#  север сверху). Каждая карта упаковывается в js/data/tex/<id>.js как data:-URL — грузится по
+#  требованию при подлёте к телу и работает даже с file://.
+# ---------------------------------------------------------------------------------------------
+SSS = 'https://www.solarsystemscope.com/textures/download/'
+ALB = 'https://stevealbers.net/albers/sos/'
+WMC = 'https://upload.wikimedia.org/wikipedia/commons/'
+CR_SSS = 'Solar System Scope / INOVE (CC BY 4.0), по данным NASA'
+TEXCACHE = os.path.join(ROOT, 'tools', '.texcache')
+# Wikimedia требует описательный User-Agent (иначе запросы режутся ограничением частоты)
+TEX_UA = {'User-Agent': 'MilkyWayPlanetarium/1.0 (offline planetarium texture script) python-requests/' + requests.__version__}
+# id, ширина результата, источники (первый доступный), подпись, обработка
+TEXTURES = [
+    ('mercury', 4096, [SSS + '8k_mercury.jpg', SSS + '2k_mercury.jpg'], CR_SSS + ' — MESSENGER', None),
+    ('venus', 2048, [SSS + '4k_venus_atmosphere.jpg', SSS + '2k_venus_atmosphere.jpg'], CR_SSS + ' — облачный покров', None),
+    ('venus_surface', 2048, [SSS + '8k_venus_surface.jpg', SSS + '2k_venus_surface.jpg'], CR_SSS + ' — радарная карта Magellan', None),
+    ('earth', 4096, [SSS + '8k_earth_daymap.jpg', SSS + '2k_earth_daymap.jpg'], CR_SSS + ' — NASA Blue Marble', None),
+    ('earth_aux', 4096, None, CR_SSS + ' — облака, маска океанов, ночные огни (NASA Black Marble)', 'earth_aux'),
+    ('earth_nrm', 2048, [SSS + '2k_earth_normal_map.tif'], CR_SSS + ' — рельеф (карта нормалей)', 'linear'),
+    ('moon', 4096, [SSS + '8k_moon.jpg', SSS + '2k_moon.jpg'], CR_SSS + ' — LRO', None),
+    ('mars', 4096, [SSS + '8k_mars.jpg', SSS + '2k_mars.jpg'], CR_SSS + ' — Viking/MGS', None),
+    ('jupiter', 4096, [SSS + '8k_jupiter.jpg', SSS + '2k_jupiter.jpg'], CR_SSS + ' — Cassini/Juno', None),
+    ('saturn', 4096, [SSS + '8k_saturn.jpg', SSS + '2k_saturn.jpg'], CR_SSS + ' — Cassini', None),
+    ('saturn_ring', 4096, [SSS + '8k_saturn_ring_alpha.png', SSS + '2k_saturn_ring_alpha.png'], CR_SSS + ' — радиальный профиль колец', 'ring'),
+    ('uranus', 1024, [SSS + '2k_uranus.jpg'], CR_SSS + ' — Voyager 2', None),
+    ('neptune', 2048, [SSS + '2k_neptune.jpg'], CR_SSS + ' — Voyager 2', None),
+    ('io', 2048, [ALB + 'jupiter/io/io_rgb_cyl.jpg'], 'NASA/JPL Galileo, Voyager; мозаика S. Albers (NOAA)', None),
+    ('europa', 1024, [WMC + '2/26/Europa_Voyager_GalileoSSI_global_mosaic.jpg'], 'NASA/JPL/USGS — Voyager & Galileo SSI (общественное достояние)', None),
+    ('ganymede', 1440, [WMC + 'b/b3/Ganymede_map_NASA_JPL_Voyager.jpg'], 'NASA/JPL/USGS — Voyager & Galileo (общественное достояние)', None),
+    ('callisto', 1440, [WMC + 'b/b2/Callisto_map_NASA_JPL_Voyager.jpg'], 'NASA/JPL/USGS — Voyager & Galileo (общественное достояние)', None),
+    ('titan', 2048, [ALB + 'saturn/titan/titan_rgb_cyl_www.jpg'], 'NASA/JPL/Space Science Institute — Cassini; мозаика S. Albers (NOAA)', None),
+    ('enceladus', 2048, [ALB + 'saturn/enceladus/enceladus_rgb_cyl_www.jpg'], 'NASA/JPL/Space Science Institute — Cassini; мозаика S. Albers (NOAA)', None),
+    ('triton', 2048, [ALB + 'neptune/triton/triton_rgb_cyl_www.jpg'], 'NASA/JPL — Voyager 2; мозаика S. Albers (NOAA)', None),
+    ('pluto', 2048, [WMC + 'thumb/a/ad/Pluto_color_mapmosaic.jpg/3840px-Pluto_color_mapmosaic.jpg',
+                     WMC + 'a/ad/Pluto_color_mapmosaic.jpg'], 'NASA/JHUAPL/SwRI — New Horizons (общественное достояние)', 'pluto'),
+]
+
+
+def get_cached(url):
+    """Скачивает файл в tools/.texcache (повторный запуск не качает заново); при 429 ждёт и повторяет."""
+    os.makedirs(TEXCACHE, exist_ok=True)
+    fn = os.path.join(TEXCACHE, re.sub(r'[^A-Za-z0-9._-]', '_', url.split('/')[-1]))
+    if os.path.exists(fn) and os.path.getsize(fn) > 1000:
+        data = open(fn, 'rb').read()
+        try:
+            Image.open(io.BytesIO(data)).verify()
+            return data
+        except Exception:  # noqa — в кеше оказалась не картинка (например, страница ошибки) — качаем заново
+            os.remove(fn)
+    for attempt in range(5):
+        print('  GET', url, flush=True)
+        r = requests.get(url, headers=TEX_UA, timeout=300)
+        if r.status_code == 429:
+            time.sleep(10 * (attempt + 1)); continue
+        r.raise_for_status()
+        if 'image' not in r.headers.get('Content-Type', ''):
+            raise RuntimeError('не изображение: ' + r.headers.get('Content-Type', ''))
+        open(fn, 'wb').write(r.content)
+        time.sleep(1.5)  # вежливая пауза между запросами
+        return r.content
+    raise RuntimeError('сервер ограничил частоту запросов')
+
+
+def open_first(urls):
+    err = None
+    for u in urls:
+        try:
+            return Image.open(io.BytesIO(get_cached(u))), u
+        except Exception as e:  # noqa
+            err = e
+            print('    ! ', e)
+    raise RuntimeError(f'ни один источник не доступен: {err}')
+
+
+def fill_unmapped(im):
+    """Неотснятые районы (чёрные) — заполняем размытым продолжением соседних цветов, чтобы не было «дыр»."""
+    import numpy as np
+    a = np.asarray(im.convert('RGB')).astype(np.float32)
+    mask = a.max(axis=2) < 10
+    if not mask.any():
+        return im
+    h, w, _ = a.shape
+    out = a.copy()
+    for x in range(w):
+        col = mask[:, x]
+        if not col.any():
+            continue
+        valid = np.where(~col)[0]
+        if len(valid) == 0:
+            continue
+        last = valid[-1]
+        ref = a[max(0, last - 40):last + 1, x].mean(axis=0)
+        for y in np.where(col)[0]:
+            k = min(1.0, (y - last) / (0.25 * h)) if y > last else 0.5
+            out[y, x] = ref * (1 - 0.35 * k) + np.array([150, 140, 130], np.float32) * 0.35 * k
+    res = Image.fromarray(out.clip(0, 255).astype(np.uint8))
+    # мягкое размытие только заполненной области
+    from PIL import ImageFilter
+    blur = res.filter(ImageFilter.GaussianBlur(6))
+    m = Image.fromarray((mask * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(4))
+    return Image.composite(blur, res, m)
+
+
+def write_tex_js(tid, data, mime, w, h, credit, extra=None):
+    out_dir = os.path.join(DATA, 'tex')
+    os.makedirs(out_dir, exist_ok=True)
+    b64 = base64.b64encode(data).decode('ascii')
+    meta = {'id': tid, 'credit': credit, 'width': w, 'height': h}
+    if extra:
+        meta.update(extra)
+    js = ("'use strict';\n/* Карта поверхности: " + credit + ". Сгенерировано tools/fetch_data.py */\n"
+          "window.MW = window.MW || {};\nMW.texData = MW.texData || {};\n"
+          "MW.texData[" + json.dumps(tid) + "] = Object.assign(" + json.dumps(meta, ensure_ascii=False) +
+          ", { url: \"data:" + mime + ";base64," + b64 + "\" });\n"
+          "if (MW.onTexData) MW.onTexData(" + json.dumps(tid) + ");\n")
+    with open(os.path.join(out_dir, tid + '.js'), 'w', encoding='utf-8') as f:
+        f.write(js)
+    return len(b64)
+
+
+def fetch_textures(only_ids=None):
+    import numpy as np
+    total = 0
+    index = {}
+    for tid, W, urls, credit, proc in TEXTURES:
+        if only_ids and tid not in only_ids:
+            continue
+        print(f' * {tid}')
+        try:
+            extra = None
+            if proc == 'earth_aux':
+                # R — облака, G — маска океанов (из карты отражения), B — яркость ночных огней
+                clouds, _ = open_first([SSS + '8k_earth_clouds.jpg', SSS + '2k_earth_clouds.jpg'])
+                spec, _ = open_first([SSS + '2k_earth_specular_map.tif'])
+                night, _ = open_first([SSS + '8k_earth_nightmap.jpg', SSS + '2k_earth_nightmap.jpg'])
+                H = W // 2
+                r = clouds.convert('L').resize((W, H), Image.LANCZOS)
+                g = spec.convert('L').resize((W, H), Image.LANCZOS)
+                b = night.convert('L').resize((W, H), Image.LANCZOS)
+                im = Image.merge('RGB', (r, g, b))
+            elif proc == 'ring':
+                src, _ = open_first(urls)
+                a = np.asarray(src.convert('RGBA')).astype(np.float32)
+                prof = a.mean(axis=0)  # усреднение поперёк полосы → радиальный профиль
+                alpha = prof[:, 3]
+                # внутренний край кольца C — первый заметный подъём плотности; внешний край кольца A —
+                # последний плотный участок (дальше только слабое кольцо F на ~2.33 R)
+                x0 = np.where(alpha > 20)[0][0] / len(alpha)
+                x1 = (np.where(alpha > 100)[0][-1] + 1) / len(alpha)
+                # края текстуры: внутренний край кольца C (74 658 км) и внешний край кольца A (136 775 км), R = 60 268 км
+                rC, rA = 74658 / 60268, 136775 / 60268
+                k = (rA - rC) / (x1 - x0)
+                extra = {'r0': round(rC - x0 * k, 5), 'r1': round(rC + (1 - x0) * k, 5)}
+                prof = prof.reshape(1, -1, 4)
+                im = Image.fromarray(prof.clip(0, 255).astype(np.uint8), 'RGBA').resize((W, 1), Image.LANCZOS)
+                buf = io.BytesIO(); im.save(buf, 'PNG', optimize=True)
+                n = write_tex_js(tid, buf.getvalue(), 'image/png', W, 1, credit, extra)
+                total += n; index[tid] = n
+                print(f'    -> js/data/tex/{tid}.js ({n / 1e6:.2f} МБ) кольцо r = {extra["r0"]}…{extra["r1"]} R')
+                continue
+            else:
+                im, _ = open_first(urls)
+                if proc == 'pluto':
+                    im = fill_unmapped(im)
+                    # карта New Horizons — в долготах 0…360° (центр 180°, «сердце» Томбо в середине);
+                    # у нас долгота 0° в центре карты → сдвиг на половину ширины
+                    import numpy as np
+                    im = Image.fromarray(np.roll(np.asarray(im.convert('RGB')), im.width // 2, axis=1))
+                im = im.convert('RGB')
+            if im.width > W:
+                im = im.resize((W, W // 2), Image.LANCZOS)
+            elif im.height * 2 != im.width:
+                im = im.resize((im.width, im.width // 2), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, 'JPEG', quality=92 if proc in ('linear', 'earth_aux') else 88, optimize=True, progressive=True)
+            n = write_tex_js(tid, buf.getvalue(), 'image/jpeg', im.width, im.height, credit, extra)
+            total += n; index[tid] = n
+            print(f'    -> js/data/tex/{tid}.js ({im.width}x{im.height}, {n / 1e6:.2f} МБ)')
+        except Exception as e:  # noqa
+            print(f'    ! {tid}: пропущено ({e}) — тело останется процедурным')
+    print(f'  Итого текстур: {len(index)}, {total / 1e6:.1f} МБ base64')
+    return index
+
+
 if __name__ == '__main__':
     t0 = time.time()
     only = sys.argv[1:]  # например: python tools/fetch_data.py ngc
@@ -421,4 +609,7 @@ if __name__ == '__main__':
     if not only or 'exo' in only:
         print('[4/4] NASA Exoplanet Archive')
         fetch_exoplanets()
+    if not only or 'tex' in only:
+        print('[+] Карты поверхностей планет и спутников')
+        fetch_textures([a for a in only if a != 'tex'] or None)
     print('Готово за %.1f с' % (time.time() - t0))

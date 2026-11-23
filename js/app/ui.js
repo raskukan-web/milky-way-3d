@@ -366,7 +366,12 @@
     // источник данных для карточки
     source(o) {
       if (o.src) return o.src;
-      if (o.kind === 'planet' || o.kind === 'moon') return o.system && o.system.isSolar ? 'JPL (кеплеровы элементы), IAU' : 'NASA Exoplanet Archive';
+      if (o.kind === 'planet' || o.kind === 'moon') {
+        if (!(o.system && o.system.isSolar)) return 'NASA Exoplanet Archive';
+        // реальная карта поверхности — с указанием авторства снимков
+        const td = o.tex && MW.texData && MW.texData[o.tex];
+        return 'JPL (кеплеровы элементы), IAU' + (td ? ' · Карта: ' + td.credit : '');
+      }
       if (o.isSun) return 'IAU / NASA';
       if (o.kind === 'dso') return o.ext ? (o.messier ? 'Каталог Мессье · OpenNGC' : 'NGC/IC · OpenNGC') : 'Встроенный каталог (SIMBAD / NED)' + (o.messier ? ' · Мессье' : '');
       if (o.kind === 'bh') return 'GRAVITY / EHT (2022)';

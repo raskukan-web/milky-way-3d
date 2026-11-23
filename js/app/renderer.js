@@ -488,6 +488,48 @@
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     }
 
+    /* Реальные карты поверхностей (js/data/tex/<id>.js с data:-URL): грузятся по требованию при подлёте —
+       скрипт → Image → текстура с мип-уровнями. Цветные карты — в sRGB (в шейдере уже линейный цвет),
+       служебные (маски, нормали) — линейные. Пока карта грузится, тело рисуется процедурно. */
+    texGet(id, want) {
+      if (!id) return null;
+      const cache = this.texCache || (this.texCache = {});
+      let e = cache[id];
+      if (!e) {
+        if (!want) return null;
+        e = cache[id] = { state: 'loading', tex: null, ready: 0, w: 1, meta: null };
+        const s = document.createElement('script');
+        s.src = 'js/data/tex/' + id + '.js';
+        s.onload = () => {
+          const d = MW.texData && MW.texData[id];
+          if (!d || !d.url) { e.state = 'failed'; return; }
+          e.meta = d;
+          const img = new Image();
+          img.onload = () => {
+            const gl = this.gl, t = gl.createTexture();
+            const lin = /_(aux|nrm)$/.test(id);
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.texImage2D(gl.TEXTURE_2D, 0, lin ? gl.RGBA8 : gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+            gl.generateMipmap(gl.TEXTURE_2D);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, img.height === 1 ? gl.CLAMP_TO_EDGE : gl.REPEAT);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            e.tex = t; e.w = img.width; e.state = 'ready'; e.ready = performance.now();
+            d.url = null;   // строка base64 больше не нужна — освобождаем память
+          };
+          img.onerror = () => { e.state = 'failed'; };
+          img.src = d.url;
+        };
+        s.onerror = () => { e.state = 'failed'; };
+        document.head.appendChild(s);
+      }
+      return e.state === 'ready' ? e : null;
+    }
+    // плавное появление карты поверх процедурной поверхности (без «щелчка»)
+    texFade(e) { return e ? MW.util.smoothstep(0, 600, performance.now() - e.ready) : 0; }
+
     drawPlanet(b, D, rel) {
       const st = b.system.star;
       const td = TYPE_DEFAULTS[b.type] || {};
@@ -506,7 +548,8 @@
       const toStar = v3.sub(st.pos, b.pos), dS = v3.len(toStar);
       p.set('u_sunDir', f32(v3.scale(toStar, 1 / dS)));
       const flux = (st.lum || 1) / Math.pow(dS / AU, 2);
-      let inten = 1.25 * Math.pow(flux, 0.18);
+      // «адаптация глаза» и для Солнечной системы: дальние планеты (Уран, Нептун, Плутон) не тонут во мраке
+      let inten = MW.util.clamp(1.2 * Math.pow(flux, 0.06), 0.8, 1.35);
       let sc = st.color || [1, 1, 1];
       if (b.exoReal) {
         // «адаптация глаза»: у тусклых красных карликов планеты не тонут в мутно-рыжем полумраке
@@ -527,7 +570,7 @@
       p.set('u_bumpEps', MW.util.clamp(Math.min(0.5 / Math.max(pr, 1), foot), 2e-5, 0.01));
       p.set('u_foot', foot);
       p.set('u_micro', this.s.micro === false ? 0 : 1 - MW.util.smoothstep(1.5e-4, 1.2e-3, foot));
-      p.set('u_ambient', b.type === 2 ? 0.002 : b.exoReal ? 0.01 : 0.006);
+      p.set('u_ambient', b.type === 2 ? 0.0015 : b.exoReal ? 0.004 : 0.003);
       p.set('u_cloudRot', (this.scene.jd % 1000) * 0.35 + this.scene.realTime * 0.002);
       p.set('u_earthLod', Math.max(0, Math.log2((this.earthTexW / (2 * Math.PI)) / Math.max(pr, 1))));
       p.set('u_col1', f32(b.col1 || td.col1 || [0.5, 0.5, 0.5])); p.set('u_col2', f32(b.col2 || td.col2 || [0.6, 0.6, 0.6])); p.set('u_col3', f32(b.col3 || [0.4, 0.4, 0.4]));
@@ -537,6 +580,20 @@
       p.set('u_atmo', f32(atmo)); p.set('u_atmoDens', b.atmoDens || 0);
       p.set('u_ring', f32(ring)); p.set('u_ringCol', f32(b.ringCol || [0.7, 0.65, 0.55]));
       p.tex('u_earth', this.earthTex);
+      // реальные карты: цвет, служебная (облака/океаны/огни Земли, поверхность Венеры), нормали, профиль колец
+      const want = pr > 3;
+      const tC = this.texGet(b.tex, want), tA = this.texGet(b.texAux, want), tN = this.texGet(b.texNrm, want), tR = this.texGet(b.ringTex, want);
+      const dummy = this.dummyTex || (this.dummyTex = this.glc.texture2D(1, 1, { internal: this.gl.RGBA8, type: this.gl.UNSIGNED_BYTE, data: new Uint8Array([128, 128, 255, 255]) }));
+      const kC = this.texFade(tC);
+      // уровень мип-карты: тексель ≈ пиксель на поверхности (в шейдере ещё поправка на наклон у лимба)
+      const lodOf = (e) => (e ? Math.max(0, Math.log2(Math.max(foot, 0.5 / Math.max(pr, 1)) * e.w / (2 * Math.PI)) - 0.35) : 0);
+      p.tex('u_tex', tC ? tC.tex : dummy); p.tex('u_aux', tA ? tA.tex : dummy); p.tex('u_nrm', tN ? tN.tex : dummy); p.tex('u_ringTex', tR ? tR.tex : dummy);
+      p.set('u_texP', f32([kC, lodOf(tC), b.texH || 0, this.texFade(tA)]));
+      const rm = tR && tR.meta ? tR.meta : { r0: 1, r1: 2 };
+      p.set('u_texQ', f32([Math.max(D - R, 0) / R, this.texFade(tR), rm.r0, rm.r1]));
+      p.set('u_nrmK', this.texFade(tN));
+      // дымка атмосферы над диском: у плотных атмосфер (Венера, Титан) — вся, у Земли — лёгкая, у остальных — только на лимбе
+      p.set('u_hazeFloor', b.type === 1 || b.type === 11 ? 1.0 : b.type === 2 ? 0.3 : b.type === 3 ? 0.25 : 0.06);
       this.glc.blendPremul();
       this.gl.bindVertexArray(this.quadVAO || (this.quadVAO = this.glc.vao([], true)));
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
