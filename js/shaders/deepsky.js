@@ -240,37 +240,4 @@ void main(){
   o = vec4(max(col, vec3(0.0)), 0.0);
 }`;
 
-  // Сфера реликтового излучения (поверхность последнего рассеяния, ~45,7 млрд св. лет, сопутствующее расстояние):
-  // процедурная карта флуктуаций ±200 мкК в палитре карт Planck; видна только с космологических расстояний.
-  G.cmbFS = G.header + G.noise + G.ray + `
-uniform vec3 u_c;
-uniform float u_rb, u_full, u_alpha;
-out vec4 o;
-vec3 planck(float t){
-  t = clamp(t * 0.5 + 0.5, 0.0, 1.0);
-  vec3 c0 = vec3(0.0, 0.0, 0.55), c1 = vec3(0.0, 0.55, 1.0), c2 = vec3(0.95, 0.95, 0.85), c3 = vec3(1.0, 0.55, 0.0), c4 = vec3(0.6, 0.0, 0.0);
-  return t < 0.25 ? mix(c0, c1, t * 4.0) : t < 0.5 ? mix(c1, c2, (t - 0.25) * 4.0) : t < 0.75 ? mix(c2, c3, (t - 0.5) * 4.0) : mix(c3, c4, (t - 0.75) * 4.0);
-}
-float field(vec3 n){
-  // спектр мощности с пиком на угловых масштабах ~1° (первый акустический пик)
-  return 0.25 * fbm(n * 3.0, 3) + 0.55 * fbm(n * 28.0 + 7.0, 3) + 0.35 * fbm(n * 90.0 + 3.0, 2);
-}
-void main(){
-  vec3 rd = rayDir();
-  vec2 h = raySphere(vec3(0.0), rd, u_c, u_rb);
-  if (h.y < 0.0 || h.x > h.y) discard;
-  bool inside = h.x < 0.0;
-  float t = inside ? h.y : h.x;
-  vec3 n = normalize(rd * t - u_c);
-  vec3 c = planck(field(n) * 1.6);
-  float a = u_alpha;
-  if (!inside){
-    // снаружи: ближняя полусфера полупрозрачна, видна и дальняя
-    vec3 nb = normalize(rd * h.y - u_c);
-    vec3 cb = planck(field(nb) * 1.6);
-    float fr = pow(1.0 - abs(dot(n, rd)), 2.0);
-    c = mix(cb * 0.35, c, 0.55 + 0.45 * fr);
-  }
-  o = vec4(c * a * 0.6, 0.0);
-}`;
 })();

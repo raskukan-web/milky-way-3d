@@ -123,6 +123,7 @@ uniform float u_pxPerRad, u_minPx, u_maxPx, u_bright, u_nearFade;
 uniform float u_art;   // 1 = художественный HDR: насыщенная палитра
 uniform float u_dustMask; // 1 = пыль Млечного Пути: рваные облака вместо сплошной ленты
 uniform float u_bigFade;  // 1 = гасить спрайты, раздутые на экране
+uniform vec2 u_fog;       // туман по расстоянию от камеры: начало и конец (0 — выключен)
 float h31(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float vnoise(vec3 x){
   vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
@@ -174,6 +175,7 @@ void main(){
   if (u_dustMask > 0.5) dm *= mix(1.0, 0.3, smoothstep(6000.0, 22000.0, d));
   // крупные на экране газовые/пылевые спрайты плавно исчезают: вблизи нет «мыла» и чёрных клякс
   if (u_bigFade > 0.5) dm *= 1.0 - smoothstep(u_maxPx * 0.3, u_maxPx * 0.85, pix);
+  if (u_fog.y > 0.0) dm *= 1.0 - 0.85 * smoothstep(u_fog.x, u_fog.y, d);
   float k = energy * fade * dm;
   vec4 vp = u_view * vec4(rel, 1.0);
   v_uv = a_corner;

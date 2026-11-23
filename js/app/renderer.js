@@ -78,7 +78,6 @@
       this.pGas = c('gas', G.particleVS, G.gasFS);
       this.pProbe = c('probe', G.impostorVS, G.probeFS);
       this.pDSO = c('deepsky', G.dsoVS, G.dsoFS);
-      this.pCMB = c('cmb', G.impostorVS, G.cmbFS);
     }
     makeLineVAO() {
       const gl = this.gl;
@@ -179,7 +178,7 @@
       });
       this.buildDeepSky();
       // крупномасштабная структура Вселенной (синтетическая) и квазары
-      const web = MW.cosmos.buildCosmicWeb(250000);
+      const web = MW.cosmos.buildCosmicWeb(900000);
       this.webBuf = glc.instanced(web.web, L);
       this.qsoBuf = glc.instanced(web.qso, L);
       this.webInfo = web;
@@ -318,7 +317,7 @@
     pxRadius(R, D) { return Math.atan(R / Math.max(D, 1e-30)) * this.pxPerRad / (this.s.renderScale * MW.dpr()) ; }
 
     drawInst(buf) { const gl = this.gl; gl.bindVertexArray(buf.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, buf.count); }
-    drawParticles(buf, origin, model, bright, nearFade, absorb, gas) {
+    drawParticles(buf, origin, model, bright, nearFade, absorb, gas, fog) {
       if (!buf || !buf.count) return;
       const p = this.common(absorb ? this.pDust : gas ? this.pGas : this.pPart);
       p.set('u_art', !absorb && this.s.artistic ? 1 : 0);
@@ -328,6 +327,7 @@
       p.set('u_model', model || f32([1, 0, 0, 0, 1, 0, 0, 0, 1]));
       p.set('u_origin', this.relF(origin));
       // ограничение экранного размера: светящиеся частицы не расплываются в «мыльные» пятна
+      p.set('u_fog', fog || [0, 0]);
       p.set('u_bright', bright); p.set('u_minPx', 1.25 * dpr); p.set('u_maxPx', (absorb ? 80 : gas ? 140 : 36) * dpr); p.set('u_nearFade', nearFade);
       if (absorb) this.glc.blendAbsorb(); else this.glc.blendAdd();
       this.drawInst(buf);
@@ -641,26 +641,17 @@
     }
     drawCosmos(cam, sunD, panoK) {
       const U = MW.util;
-      // паутина проявляется дальше ~50 млн св. лет (внутри 250 млн её нет — там реальные галактики каталога)
-      const webK = U.smoothstep(3e7, 3e8, sunD);
+      // Паутина плавно проявляется при удалении от Местного сверхскопления (20 млн → 500 млн св. лет).
+      // Её внутренний край размыт и перекрывается с реальными галактиками OpenNGC, палитра у них общая —
+      // переход от каталога к процедурной структуре без скачка. Сферы реликтового излучения нет: за горизонтом
+      // (46,5 млрд св. лет) — чёрный космос; дальние объекты гаснут туманом по расстоянию от камеры.
+      const webK = U.smoothstep(2e7, 5e8, sunD);
       if (webK > 0.01) {
         // яркость растёт с расстоянием: издали видна вся сеть, а не отдельные точки
-        const gain = webK * (0.5 + 2.5 * U.smoothstep(1e9, 4e10, sunD));
-        this.drawParticles(this.webBuf, [0, 0, 0], null, 0.9 * gain, 2.0, false);
-        this.drawParticles(this.qsoBuf, [0, 0, 0], null, 1.6 * gain, 2.0, false);
-      }
-      // сфера последнего рассеяния (реликтовое излучение), ~45,7 млрд св. лет
-      const R = MW.cosmos.CMB_R;
-      const cmbK = U.smoothstep(4e9, 3.5e10, sunD);
-      if (cmbK > 0.01) {
-        const rel = v3.scale(cam.pos, -1), D = Math.max(v3.len(rel), 1);
-        const p = this.common(this.pCMB);
-        p.set('u_c', f32(v3.scale(rel, 1 / D))); p.set('u_rb', R / D); p.set('u_full', D < R * 1.05 ? 1 : 0);
-        // изнутри — приглушённый фон за паутиной, снаружи — полноценная сфера
-        p.set('u_alpha', cmbK * (D > R ? 1.0 : 0.22 + 0.5 * U.smoothstep(3e10, 4.5e10, sunD)));
-        this.glc.blendAdd();
-        this.gl.bindVertexArray(this.quadVAO || (this.quadVAO = this.glc.vao([], true)));
-        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+        const gain = webK * (0.55 + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
+        const fog = [1.8e10, 8e10];
+        this.drawParticles(this.webBuf, [0, 0, 0], null, 0.9 * gain, 2.0, false, false, fog);
+        this.drawParticles(this.qsoBuf, [0, 0, 0], null, 1.6 * gain, 2.0, false, false, fog);
       }
     }
 
