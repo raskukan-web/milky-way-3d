@@ -165,6 +165,8 @@
       tog('#tConst', () => s.constellations, (v) => (s.constellations = v));
       tog('#tGrid', () => s.grid, (v) => (s.grid = v));
       tog('#tOrbits', () => s.orbits, (v) => (s.orbits = v));
+      tog('#tLens', () => s.lens !== false, (v) => (s.lens = v));
+      tog('#tAutoExp', () => s.autoExposure !== false, (v) => (s.autoExposure = v));
       const sl = (id, key, fmt) => {
         const el = $(id), out = $(id + 'V');
         el.value = s[key];

@@ -250,8 +250,11 @@
         let col = COL[cls] || [1, 1, 1];
         if (cls === 9 || cls === 10) col = [0, Math.min(1 / o.period, 2.5), 0];    // видимая частота вращения пучков
         const p = o.pos, hi = [Math.fround(p[0]), Math.fround(p[1]), Math.fround(p[2])];
+        // остатки сверхновых: тип модели в сиде (0 молодой, 1 старый, 2 плерион)
+        const snrTyp = cls !== 4 ? 0 : /^(m1|crab)/.test(o.id) || /Краб/.test(o.name) ? 2
+          : /kepler|tycho|casa|cas_a|sn1987|sn1006|g1\.9/i.test(o.id) || /Кеплер|Тихо|Кассиопея|1987|1006/.test(o.name) ? 0 : 1;
         out.push(hi[0], hi[1], hi[2], p[0] - hi[0], p[1] - hi[1], p[2] - hi[2], nrm[0], nrm[1], nrm[2], col[0], col[1], col[2],
-          Math.max(o.radius, 1e-4), cls, h(), absM);
+          Math.max(o.radius, 1e-4), cls, snrTyp * 10 + h(), absM);
         this.dsoList.push(o);
       }
       this.dsoBuf = this.glc.instanced(f32(out), [[1, 3], [2, 3], [3, 3], [4, 3], [5, 4]]);

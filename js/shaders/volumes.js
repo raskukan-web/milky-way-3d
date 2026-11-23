@@ -9,7 +9,7 @@
   const G = MW.GLSL;
 
   // ---------- Туманности ----------
-  G.nebulaFS = G.header + G.noise + G.ray + `
+  G.nebulaFS = G.header + G.noise + G.ray + G.snr + `
 uniform vec3 u_c;
 uniform float u_rb, u_full;
 uniform mat3 u_rot;          // мир → локальная система туманности
@@ -56,18 +56,31 @@ void sampleNeb(vec3 p, out vec3 emis, out float absb){
     // перед ним — плотное тёмное облако L1630 с ровной кромкой, из которой поднимается силуэт головы (B33).
     vec2 xy = p.xy;
     float wv = fbm(vec3(xy * 5.0, 1.0) + SP, 4);
-    float sheet = exp(-pow((p.z - 0.15) / 0.22, 2.0)) * smoothstep(1.0, 0.55, length(xy));
+    // мягкое затухание к краям области рендера с неровной (шумовой) границей — без круглого обреза
+    float rEdge = length(xy) + 0.12 * fbm(vec3(xy * 2.5, 5.0) + SP, 3);
+    float fadeOut = smoothstep(0.98, 0.35, rEdge);
+    float sheet = exp(-pow((p.z - 0.15) / 0.22, 2.0)) * fadeOut;
     float stri = fbm(vec3(p.x * 9.0, p.y * 1.6, p.z * 3.0) + SP, 5) * 0.5 + 0.5;
     float grad = smoothstep(-0.6, 0.7, p.y);
     emis = u_col1 * sheet * (0.35 + 1.3 * stri) * (0.25 + 1.2 * grad);
-    // кромка облака и силуэт (рваные края — шум)
-    float edge = -0.07 + 0.035 * fbm(vec3(p.x * 7.0, 0.0, 2.0) + SP, 3);
-    vec2 qh = xy + 0.012 * vec2(fbm(vec3(xy * 22.0, 3.0) + SP, 3), fbm(vec3(xy * 22.0, 7.0) + SP, 3));
-    float dsil = min(p.y - edge, horse((qh - vec2(-0.05, -0.04)) / 2.1) * 2.1);   // голова ~ четверть поперечника IC 434
-    float cloud = smoothstep(0.012, -0.01, dsil) * smoothstep(-0.75, -0.55, p.z) * smoothstep(0.12, 0.0, p.z) * smoothstep(1.0, 0.7, length(xy));
-    // светящийся фронт ионизации по краю облака
-    float rim = exp(-pow(dsil / 0.01, 2.0)) * smoothstep(-0.4, -0.05, p.z) * smoothstep(0.1, -0.05, p.z);
-    emis += u_col2 * rim * 1.6;
+    // Силуэт — не геометрия, а турбулентная пыль: исходная форма (голова на шее) лишь задаёт «каркас»,
+    // а координаты искажены многослойным вихревым шумом (domain warping), края разъедены ridged fBm.
+    vec3 wp = vec3(xy * 3.2, p.z * 2.0);
+    vec2 w1 = vec2(fbm(wp + SP, 4), fbm(wp + SP + 4.7, 4));
+    vec2 w2 = vec2(fbm(vec3(xy * 7.0 + w1 * 1.4, 1.3) + SP, 3), fbm(vec3(xy * 7.0 + w1 * 1.4, 8.1) + SP, 3));
+    vec2 qh = xy + 0.045 * w1 + 0.022 * w2;
+    float erode = ridged(vec3(qh * 14.0, p.z * 4.0) + SP, 4);          // клочья и прожилки по краям
+    // зазубренное основание облака L1630: несколько масштабов шума + столбики-выступы
+    float edge = -0.09 + 0.09 * fbm(vec3(qh.x * 3.0, qh.y * 2.0, 2.0) + SP, 4) + 0.045 * ridged(vec3(qh.x * 12.0, qh.y * 6.0, 3.0) + SP, 4) - 0.025;
+    float dsil = min(p.y - edge, horse((qh - vec2(-0.05, -0.04)) / 2.1) * 2.1) + 0.018 * (erode - 0.5);
+    // плотное ядро + полупрозрачные «волосы» пыли (грива, космы над кромкой)
+    float core = smoothstep(0.006, -0.018, dsil);
+    float hair = smoothstep(0.05, 0.0, dsil) * smoothstep(0.55, 0.95, ridged(vec3(qh * vec2(10.0, 26.0), p.z * 3.0) + SP + 2.0, 4)) * (1.0 - core);
+    float slab = smoothstep(-0.75, -0.55, p.z) * smoothstep(0.12, 0.0, p.z) * fadeOut;
+    float cloud = (core + hair * 0.35) * slab;
+    // светящийся фронт ионизации по краю облака — тоже рваный
+    float rim = exp(-pow(dsil / 0.012, 2.0)) * (0.4 + 0.6 * erode) * smoothstep(-0.4, -0.05, p.z) * smoothstep(0.1, -0.05, p.z) * fadeOut;
+    emis += u_col2 * rim * 1.4;
     // голубая отражательная туманность NGC 2023 в облаке
     emis += u_col3 * exp(-dot(xy - vec2(-0.38, -0.36), xy - vec2(-0.38, -0.36)) / 0.006) * exp(-pow((p.z + 0.45) / 0.1, 2.0)) * 2.0;
     absb = cloud * (22.0 + 10.0 * wv) + sheet * 0.15;
@@ -88,17 +101,9 @@ void sampleNeb(vec3 p, out vec3 emis, out float absb){
     emis = c * (shell * (1.2 + 0.8 * knots) + inner) + u_col3 * halo + u_col3 * cometary * 1.5;
     absb = shell * knots * 0.6 + cometary * 2.0;
   } else if (u_kind == 2){
-    vec3 s = p / vec3(1.0, 0.72, 0.72);
-    float rs = length(s);
-    vec3 w = vec3(fbm(s * 2.0 + SP, 3), fbm(s * 2.0 + SP + 4.0, 3), fbm(s * 2.0 + SP + 8.0, 3));
-    vec3 q = s + w * 0.25;
-    float fil = pow(ridged(q * 3.0 + SP, 6), 2.0);
-    float shell = u_par.y > 0.5 ? smoothstep(1.0, 0.88, rs) * smoothstep(0.62, 0.86, rs) * 1.6
-                                : smoothstep(1.0, 0.75, rs) * smoothstep(0.15, 0.6, rs);
-    float sync = exp(-rs * rs * 3.0) * (0.6 + 0.4 * fbm(q * 4.0 + SP, 4)) * u_par.x;
-    vec3 fc = mix(u_col1, u_col2, smoothstep(0.2, 0.8, fbm(q * 5.0, 3) * 0.5 + 0.5));
-    emis = fc * fil * shell * 2.2 + u_col3 * sync * 0.9;
-    absb = fil * shell * 0.5;
+    // остаток сверхновой — объёмная модель из snr.js: плерион (Краб), старый (Вуаль) или молодой
+    int typ = u_par.x > 0.5 ? 2 : (u_par.y > 0.5 ? 1 : 0);
+    snrSample(p, u_seed, typ, emis, absb);
   } else if (u_kind == 5){
     // оболочка с полостью (Розетка): ветер центрального скопления выдул центр
     vec3 w = vec3(fbm(p * 1.5 + SP, 3), fbm(p * 1.5 + SP + 4.0, 3), fbm(p * 1.5 + SP + 8.0, 3));
@@ -176,7 +181,8 @@ void main(){
     vec3 e; float a;
     sampleNeb(p, e, a);
     float dens = e.r + e.g + e.b + a;
-    float dt = dens < 0.03 ? dt0 * 2.5 : (dens < 0.15 ? dt0 * 1.5 : dt0);
+    // у тонких лент остатков сверхновых крупный шаг их проскакивает — там шаг постоянный
+    float dt = u_kind == 2 ? dt0 : (dens < 0.03 ? dt0 * 2.5 : (dens < 0.15 ? dt0 * 1.5 : dt0));
     dt = min(dt, L1 - t);
     col += T * e * dt;
     T *= exp(-a * dt);

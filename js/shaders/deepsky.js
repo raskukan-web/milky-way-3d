@@ -56,7 +56,7 @@ void main(){
   gl_Position = u_proj * pv;
 }`;
 
-  G.dsoFS = G.header + G.noise + G.ray + `
+  G.dsoFS = G.header + G.noise + G.ray + G.snr + `
 in vec3 v_rel;
 in vec3 v_nrm;
 in vec3 v_col;
@@ -158,12 +158,12 @@ void main(){
       col = vec3(0.3, 0.95, 0.85) * (ch1 - ch2 + 0.25 * ch2) * nz * 1.5 + vec3(1.0, 0.28, 0.25) * (ch3 - ch1) * 2.0 * (0.7 + 0.5 * snoise(dl * 7.0 + seed));
       col += vec3(0.85, 0.9, 1.0) * exp(-pow(b * v_pr / 1.6, 2.0)) * 3.0;
     } else if (cls == 4){
-      // ---------- остаток сверхновой: тонкие волокна на расширяющейся оболочке ----------
-      float ch1 = sqrt(max(1.0 - b * b, 0.0)), ch2 = sqrt(max(0.86 * 0.86 - b * b, 0.0));
-      vec3 dl = normalize(cp + vec3(1e-9));
-      float fil = pow(1.0 - abs(snoise(dl * 6.0 + seed * 11.0)), 6.0) + 0.5 * pow(1.0 - abs(snoise(dl * 14.0 + seed)), 8.0);
-      col = mix(vec3(1.0, 0.35, 0.3), vec3(0.35, 0.65, 1.0), smoothstep(-0.3, 0.4, snoise(dl * 2.0 + seed * 3.0))) * (ch1 - ch2) * fil * 3.0;
-      col += vec3(0.4, 0.5, 1.0) * exp(-b * 5.0) * 0.15;
+      // ---------- остаток сверхновой: объёмная трассировка (snr.js); тип зашит в сид: тип·10 + сид ----------
+      int typ = int(floor(seed / 10.0));
+      float sd = seed - float(typ) * 10.0;
+      float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+      vec4 m = snrMarch(-C / R, rd, sd, typ, ign);
+      col = m.rgb * 1.4;
     } else if (cls == 5 || cls == 6){
       // ---------- диффузная туманность: несколько слоёв шума вдоль луча ----------
       float acc = 0.0;
