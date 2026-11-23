@@ -22,8 +22,35 @@
   const armPhi = (k, r) => Math.PI + k * Math.PI / 2 + Math.log(r / R_REF) / TANP;
   const wrap = (a) => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };
 
+  // Плавный 2D-шум (value noise) и векторное поле искажения координат в двух масштабах (domain warping):
+  // рукава изгибаются, рвутся на звёздные облака и ветвятся вместо ровных «труб». Крупный масштаб
+  // (~7000 св. лет, ±1100) меняет форму рукава, мелкий (~2200, ±380) рвёт его кромки. Положения рукавов
+  // в среднем остаются прежними (модель Reid et al. 2019 / Vallée 2017).
+  function hash2(i, j) { let h = Math.imul(i | 0, 374761393) ^ Math.imul(j | 0, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+  function vnoise2(x, y) {
+    const i = Math.floor(x), j = Math.floor(y), fx = x - i, fy = y - j;
+    const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+    const a = hash2(i, j), b = hash2(i + 1, j), c = hash2(i, j + 1), d = hash2(i + 1, j + 1);
+    return (a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v) * 2 - 1;
+  }
+  function warp0(x, y) {
+    const s1 = 1 / 7000, s2 = 1 / 2200;
+    return [1100 * vnoise2(x * s1 + 3.1, y * s1 + 7.7) + 380 * vnoise2(x * s2 + 11.3, y * s2 + 1.9),
+            1100 * vnoise2(x * s1 + 17.2, y * s1 + 5.3) + 380 * vnoise2(x * s2 + 2.7, y * s2 + 13.4)];
+  }
+  // двухуровневое искажение (искажение искажённых координат) — вихревые изгибы, как у завихрённого поля
+  function warp(x, y) {
+    const w = warp0(x, y);
+    const v = warp0(x + 0.6 * w[0], y + 0.6 * w[1]);
+    // у ядра искажение гаснет: бар и балдж остаются ровными
+    const k = MW.util.smoothstep(5000, 11000, Math.hypot(x, y));
+    return [v[0] * k, v[1] * k];
+  }
+
   // Плотность рукавов в точке (x,y — относительно центра Галактики)
-  function armField(x, y) {
+  function armField(x0, y0) {
+    const wv = warp(x0, y0);
+    const x = x0 - wv[0], y = y0 - wv[1];
     const R = Math.hypot(x, y);
     if (R < 1) return { dens: 0, k: -1, perp: 1e9 };
     const phi = Math.atan2(y, x);
@@ -68,134 +95,194 @@
     const lum = [], dust = [];
     const push = (arr, x, y, z, r, gg, b, s) => arr.push(x, y, z, r, gg, b, s);
     const cb = Math.cos(BAR_ANGLE), sb = Math.sin(BAR_ANGLE);
-    const coreFade = (x, y) => MW.util.smoothstep(3500, 8000, Math.hypot(x, y)); // пыль не перекрывает ядро
+    const coreFade = (x, y) => MW.util.smoothstep(1800, 5000, Math.hypot(x, y)); // пыль не перекрывает ядро
     const gas = [];
 
-    // 1. Балдж: трёхосный эллипсоид ~10 000 × 6 000 × 5 000 св. лет (σ = 2500/1500/1250),
-    //    длинный бар и ядро — плотные золотистые старые звёзды
-    for (let i = 0, n = N(120000); i < n; i++) {
+    // 1. Балдж и перемычка: компактный балдж, длинный плотный бар (~13 000 × 2 600 св. лет) и ядро —
+    //    тёплые золотисто-кремовые старые звёзды с резким переходом в сине-белые рукава
+    for (let i = 0, n = N(150000); i < n; i++) {
       let u, v, z;
       const t = rnd();
-      if (t < 0.6) { u = g() * 2500; v = g() * 1500; z = g() * 1250; }
-      else if (t < 0.86) { u = g() * 5200; v = g() * 850; z = g() * 520; }
+      if (t < 0.42) { u = g() * 2100; v = g() * 1350; z = g() * 1100; }
+      else if (t < 0.9) { u = g() * 6600; v = g() * 640; z = g() * 430; }
       else {
-        const r = -650 * Math.log(rnd() * rnd() + 1e-9);
+        const r = -600 * Math.log(rnd() * rnd() + 1e-9);
         const th = Math.acos(2 * rnd() - 1), ph = rnd() * TAU;
         u = r * Math.sin(th) * Math.cos(ph); v = r * Math.sin(th) * Math.sin(ph) * 0.8; z = r * Math.cos(th) * 0.7;
       }
       const x = u * cb - v * sb, y = u * sb + v * cb;
-      const rr = Math.hypot(u / 2500, v / 1500, z / 1250);
-      const c = 0.8 + 0.2 * rnd();
-      const br = 0.3 + 0.22 * Math.exp(-rr * 1.2);
-      const warm = rnd() < 0.15 ? 0.85 : 1.0;
-      push(lum, x, y, z, 1.0 * br * c, 0.8 * br * c * warm, 0.5 * br * c * warm, 90 + 230 * rnd());
+      const rr = Math.hypot(u / 6600, v / 1350, z / 1100);
+      const c = 0.85 + 0.15 * rnd();
+      const br = 0.34 + 0.3 * Math.exp(-rr * 1.6);
+      const warm = rnd() < 0.2 ? 0.82 : 1.0;
+      push(lum, x, y, z, 1.0 * br * c, 0.8 * br * c * warm, 0.5 * br * c * warm * warm, 70 + 160 * rnd());
     }
-    // 1b. Толстый диск: старые звёзды, гауссова высота σ≈1150 св. лет (до ~3500 над/под плоскостью)
-    for (let i = 0, n = N(130000); i < n;) {
+    // 1b. Толстый диск: старые звёзды, гауссова высота σ≈1150 св. лет — мелкие точки, а не туман
+    for (let i = 0, n = N(110000); i < n;) {
       const R = 1500 + (-12500 * Math.log(rnd() * rnd() + 1e-12));
       if (R > 70000) continue;
       i++;
       const ph = rnd() * TAU;
       const z = g() * (1150 + R * 0.012);
       const c = 0.85 + 0.15 * rnd();
-      const br = 0.75 * (0.6 + 0.4 * rnd());
-      push(lum, R * Math.cos(ph), R * Math.sin(ph), z, 1.0 * br * c, 0.86 * br * c, 0.66 * br * c, 160 + 300 * rnd());
+      const br = 0.32 * (0.6 + 0.4 * rnd());
+      push(lum, R * Math.cos(ph), R * Math.sin(ph), z, 1.0 * br * c, 0.86 * br * c, 0.7 * br * c, 110 + 200 * rnd());
     }
     // ядро: ядерное звёздное скопление
     for (let i = 0, n = N(6000); i < n; i++) {
       const r = -140 * Math.log(rnd() + 1e-9);
       const th = Math.acos(2 * rnd() - 1), ph = rnd() * TAU;
-      push(lum, r * Math.sin(th) * Math.cos(ph), r * Math.sin(th) * Math.sin(ph), r * Math.cos(th) * 0.6, 0.55, 0.42, 0.3, 25 + 60 * rnd());
+      push(lum, r * Math.sin(th) * Math.cos(ph), r * Math.sin(th) * Math.sin(ph), r * Math.cos(th) * 0.6, 0.6, 0.46, 0.3, 25 + 60 * rnd());
     }
-    // 2. Тонкий диск с модуляцией рукавами
-    for (let i = 0, n = N(170000); i < n;) {
+    // 2. Тонкий диск с модуляцией рукавами (плотность — по искажённым рукавам)
+    for (let i = 0, n = N(150000); i < n;) {
       const R = 2500 + (-10500 * Math.log(rnd() * rnd() + 1e-12));
       if (R > 72000) continue;
       const ph = rnd() * TAU;
       const x = R * Math.cos(ph), y = R * Math.sin(ph);
       const af = armField(x, y);
-      if (rnd() > 0.3 + 0.7 * af.dens) continue;
+      if (rnd() > 0.12 + 0.88 * af.dens) continue;
       i++;
       const flare = 1 + Math.max(0, R - 30000) / 25000;
       const z = g() * 700 * flare;
       const t = af.dens;
-      const r0 = 1.0 - 0.2 * t, g0 = 0.88 - 0.02 * t, b0 = 0.74 + 0.22 * t;
-      const br = 0.42 * (0.6 + 0.4 * rnd());
-      push(lum, x, y, z, r0 * br, g0 * br, b0 * br, 240 + 380 * rnd());
-      if (rnd() < 0.22) { // общая диффузная пыль диска (клочковатая)
-        const o = 0.025 + 0.05 * rnd() * rnd();
-        push(dust, x + g() * 300, y + g() * 300, g() * 180, o * 0.85, o, o * 1.3, 300 + 400 * rnd());
-      }
+      const r0 = 1.0 - 0.22 * t, g0 = 0.88 - 0.02 * t, b0 = 0.74 + 0.24 * t;
+      const br = 0.38 * (0.5 + 0.5 * rnd());
+      push(lum, x, y, z, r0 * br, g0 * br, b0 * br, 120 + 220 * rnd());
     }
-    // 3. Молодые голубые звёзды, H II и пыль вдоль рукавов
+    // 3. Рукава: точка на гребне рукава k на радиусе r — с искажением координат
     const armSample = (k) => {
       const a = ARMS[k];
       let r;
       do { r = a.rStart + (-15000 * Math.log(rnd() + 1e-12)); } while (r > 62000);
       return { r, phi: armPhi(k, r) };
     };
-    for (let i = 0, n = N(120000); i < n; i++) {
-      const k = rnd() < 0.62 ? (rnd() < 0.5 ? 1 : 3) : (rnd() < 0.5 ? 0 : 2);
-      const { r, phi } = armSample(k);
-      const w = (650 + r * 0.012) * g();
-      const rr = r + w;
-      const x = rr * Math.cos(phi) + g() * 220, y = rr * Math.sin(phi) + g() * 220, z = g() * 230;
+    const onArm = (k, r, off) => {
+      const phi = armPhi(k, r), rr = r + off;
+      const x = rr * Math.cos(phi), y = rr * Math.sin(phi);
+      const w = warp(x, y);
+      return [x + w[0], y + w[1]];
+    };
+    const pickArm = () => (rnd() < 0.62 ? (rnd() < 0.5 ? 1 : 3) : (rnd() < 0.5 ? 0 : 2));
+    // 3a. Рассеянные молодые звёзды рукавов — мелкие резкие точки
+    for (let i = 0, n = N(60000); i < n; i++) {
+      const k = pickArm();
+      const { r } = armSample(k);
+      const [x, y] = onArm(k, r, (900 + r * 0.016) * g());
       const c = rnd();
-      const br = (0.7 + 0.6 * rnd()) * ARMS[k].strength;
-      push(lum, x, y, z, (0.62 + 0.25 * c) * br, (0.76 + 0.15 * c) * br, 1.0 * br, 110 + 260 * rnd());
+      const br = (0.75 + 0.7 * rnd()) * ARMS[k].strength;
+      push(lum, x + g() * 160, y + g() * 160, g() * 200, (0.62 + 0.25 * c) * br, (0.76 + 0.15 * c) * br, 1.0 * br, 70 + 130 * rnd());
+    }
+    // 3b. OB-ассоциации и звёздные облака вдоль гребней рукавов: плотные рои ярких голубых звёзд
+    for (let a = 0, n = N(3200); a < n; a++) {
+      const k = pickArm();
+      const { r } = armSample(k);
+      const [cx, cy] = onArm(k, r, g() * (500 + r * 0.008));
+      const cz = g() * 90;
+      const sz = 60 + 220 * rnd(), m = 10 + ((rnd() * 40) | 0);
+      const rich = 1.4 + 1.6 * rnd();
+      for (let j = 0; j < m; j++) {
+        const c = rnd();
+        push(lum, cx + g() * sz, cy + g() * sz, cz + g() * sz * 0.4, (0.66 + 0.2 * c) * rich, (0.8 + 0.12 * c) * rich, 1.1 * rich, 45 + 90 * rnd());
+      }
     }
     // рукав Ориона
     for (let i = 0, n = N(9000); i < n; i++) {
       const sp = Math.PI + 0.08 + g() * 0.3;
       const R = 26150 * Math.exp((sp - Math.PI - 0.04) * Math.tan(14 * MW.C.DEG)) + g() * 700;
-      push(lum, R * Math.cos(sp), R * Math.sin(sp), g() * 200, 0.55, 0.68, 0.95, 90 + 200 * rnd());
+      push(lum, R * Math.cos(sp), R * Math.sin(sp), g() * 200, 0.6, 0.72, 1.0, 70 + 150 * rnd());
     }
-    // H II области (розовые узлы) и OB-ассоциации
-    for (let i = 0, n = N(7000); i < n; i++) {
-      const k = rnd() < 0.6 ? (rnd() < 0.5 ? 1 : 3) : (rnd() < 0.5 ? 0 : 2);
-      const { r, phi } = armSample(k);
-      const rr = r + 350 + g() * 450;
-      const x = rr * Math.cos(phi), y = rr * Math.sin(phi), z = g() * 120;
-      const br = 1.1 + 1.2 * rnd();
-      push(lum, x, y, z, 1.0 * br, 0.32 * br, 0.45 * br, 60 + 200 * rnd());
-      if (rnd() < 0.5) push(lum, x + g() * 150, y + g() * 150, z + g() * 60, 1.5, 1.8, 2.6, 15 + 30 * rnd());
-    }
-    for (let i = 0, n = N(16000); i < n; i++) {
-      const k = (rnd() * 4) | 0;
-      const { r, phi } = armSample(k);
-      const rr = r + g() * 600;
-      push(lum, rr * Math.cos(phi) + g() * 300, rr * Math.sin(phi) + g() * 300, g() * 150, 2.2, 2.5, 3.2, 12 + 30 * rnd());
-    }
-    // пылевые полосы по внутренней (вогнутой) кромке рукавов — клочковатые облака
-    for (let c = 0, nc = N(6500); c < nc; c++) {
-      const k = rnd() < 0.6 ? (rnd() < 0.5 ? 1 : 3) : (rnd() < 0.5 ? 0 : 2);
-      const { r, phi } = armSample(k);
-      const rr = r - 700 - Math.abs(g()) * 500;
-      const cx = rr * Math.cos(phi) + g() * 300, cy = rr * Math.sin(phi) + g() * 300, cz = g() * 110;
-      const dens = Math.pow(rnd(), 1.8);
-      const m = 6 + ((rnd() * 10) | 0);
-      const cf = coreFade(cx, cy);
-      for (let j = 0; j < m; j++) {
-        const o = (0.05 + 0.25 * dens) * (0.5 + rnd()) * cf;
-        push(dust, cx + g() * 260, cy + g() * 260, cz + g() * 70, o * 0.65, o * 0.85, o * 1.25, 120 + 300 * rnd());
+    // 3c. Шпоры и перья: короткие ветви, отходящие от рукавов наружу под большим углом закрутки (~40–60°),
+    //     со звёздами, узлами H II и пылью — как на снимках «Хаббла» и иллюстрации NASA/JPL (R. Hurt)
+    const spurs = [];
+    for (let k = 0; k < 4; k++) {
+      const ns = Math.round(N(16) * (ARMS[k].strength > 0.8 ? 1.3 : 0.9));
+      for (let s = 0; s < ns; s++) {
+        const r0 = ARMS[k].rStart * 0.9 + rnd() * (52000 - ARMS[k].rStart);
+        const tp = Math.tan((38 + 22 * rnd()) * MW.C.DEG);
+        const len = 2500 + 6500 * rnd();
+        spurs.push({ k, r0, phi0: armPhi(k, r0), tp, len, feather: rnd() < 0.45 });
       }
     }
-    // ветвящиеся тёмные прожилки пыли вдоль внутренних кромок рукавов (затухают к ядру балджа)
-    for (let l = 0, nl = N(1700); l < nl; l++) {
-      const k = rnd() < 0.62 ? (rnd() < 0.5 ? 1 : 3) : (rnd() < 0.5 ? 0 : 2);
-      let { r } = armSample(k);
-      let off = -650 - Math.abs(g()) * 350, zc = g() * 60;
-      const steps = 20 + ((rnd() * 30) | 0), dr = (rnd() < 0.5 ? 1 : -1) * (90 + 60 * rnd());
-      const o0 = 0.12 + 0.22 * rnd();
+    const spurPt = (sp, f) => {
+      const r = sp.r0 + f * sp.len;
+      const phi = sp.phi0 + Math.log(r / sp.r0) / sp.tp;
+      const x = r * Math.cos(phi), y = r * Math.sin(phi);
+      const w = warp(x, y);
+      return [x + w[0], y + w[1], r];
+    };
+    for (const sp of spurs) {
+      if (sp.feather) continue;
+      const nst = Math.round(N(260) * sp.len / 6000);
+      for (let i = 0; i < nst; i++) {
+        const f = Math.pow(rnd(), 1.3);
+        const [x, y] = spurPt(sp, f);
+        const fade = 1 - 0.7 * f;
+        const c = rnd(), br = (0.8 + 1.2 * rnd()) * fade;
+        push(lum, x + g() * 140, y + g() * 140, g() * 120, (0.64 + 0.22 * c) * br, (0.78 + 0.14 * c) * br, 1.05 * br, 50 + 100 * rnd());
+      }
+    }
+    // 4. Области H II: сотни компактных рубиново-розовых узлов вдоль гребней рукавов и на шпорах.
+    //    Цвет насыщенный (мало зелёного), яркость умеренная — при сложении узлы не выгорают в белый.
+    const hii = (cx, cy, cz, w) => {
+      const sz = 90 + 180 * rnd();
+      push(gas, cx, cy, cz, 1.1 * w, 0.12 * w, 0.62 * w, sz * 2.0);
+      const m = 10 + ((rnd() * 12) | 0);
+      for (let j = 0; j < m; j++) push(lum, cx + g() * sz * 0.4, cy + g() * sz * 0.4, cz + g() * sz * 0.2, 2.4 * w, 0.3 * w, 1.5 * w, 60 + 90 * rnd());
+      for (let j = 0, nb = 2 + ((rnd() * 4) | 0); j < nb; j++) push(lum, cx + g() * sz * 0.35, cy + g() * sz * 0.35, cz + g() * 25, 1.8, 2.1, 2.8, 22 + 30 * rnd());
+    };
+    for (let c = 0, n = N(780); c < n; c++) {
+      const k = pickArm();
+      const { r } = armSample(k);
+      const [cx, cy] = onArm(k, r, 260 + g() * 260);
+      hii(cx, cy, g() * 70, 0.7 + 0.8 * rnd());
+    }
+    for (const sp of spurs) {
+      if (sp.feather) continue;
+      for (let j = 0, nh = 1 + ((rnd() * 4) | 0); j < nh; j++) { const [x, y] = spurPt(sp, rnd() * 0.7); hii(x, y, g() * 60, 0.6 + 0.6 * rnd()); }
+    }
+    // 5. Пыль. Общая клочковатая пыль диска (немного — без мутной пелены)
+    for (let i = 0, n = N(30000); i < n;) {
+      const R = 2500 + (-10500 * Math.log(rnd() * rnd() + 1e-12));
+      if (R > 60000) continue;
+      i++;
+      const ph = rnd() * TAU, x = R * Math.cos(ph), y = R * Math.sin(ph);
+      const o = (0.02 + 0.04 * rnd() * rnd()) * coreFade(x, y);
+      push(dust, x + g() * 300, y + g() * 300, g() * 180, o * 0.75, o, o * 1.35, 250 + 300 * rnd());
+    }
+    // 5a. Тонкие резкие ветвящиеся прожилки пыли по внутренним (вогнутым) кромкам рукавов — тёмно-бурые
+    //     (сильнее поглощают синий), «прорезают» светящиеся звёздные поля
+    const lane = (x0, y0, z0, dirx, diry, steps, o0, w0) => {
+      let x = x0, y = y0, dx = dirx, dy = diry, o = o0;
       for (let s = 0; s < steps; s++) {
-        r += dr * 0.35; off += g() * 45;
-        const phi = armPhi(k, r) + (dr * s * 0.0) / r;
-        const rr = r + off;
-        const x = rr * Math.cos(phi) + g() * 40, y = rr * Math.sin(phi) + g() * 40;
-        const o = o0 * (0.6 + 0.6 * rnd()) * coreFade(x, y);
-        if (o > 0.004) push(dust, x, y, zc + g() * 35, o * 0.55, o * 0.8, o * 1.25, 70 + 140 * rnd());
-        // ответвление (шпора) наружу от рукава
-        if (rnd() < 0.05) { let bo = off; for (let b = 0; b < 8; b++) { bo += 90 + 40 * rnd(); const xb = (r + bo) * Math.cos(phi + b * 0.004), yb = (r + bo) * Math.sin(phi + b * 0.004); push(dust, xb, yb, zc, o * 0.45, o * 0.65, o * 1.0, 60 + 90 * rnd()); } }
+        const ang = g() * 0.12; const ca = Math.cos(ang), sa = Math.sin(ang);
+        const ndx = dx * ca - dy * sa, ndy = dx * sa + dy * ca; dx = ndx; dy = ndy;
+        x += dx * 55; y += dy * 55;
+        const cf = coreFade(x, y);
+        const oo = o * (0.6 + 0.6 * rnd()) * cf;
+        if (oo > 0.004) push(dust, x + g() * 18, y + g() * 18, z0 + g() * 25, oo * 0.42, oo * 0.72, oo * 1.3, w0 * (0.7 + 0.6 * rnd()));
+        if (oo > 0.004 && rnd() < 0.5) push(dust, x + dx * 27, y + dy * 27, z0 + g() * 25, oo * 0.42, oo * 0.72, oo * 1.3, w0 * (0.7 + 0.6 * rnd()));
+        // ветвление
+        if (rnd() < 0.025 && steps - s > 8) lane(x, y, z0, dx * 0.7 - dy * 0.7 * (rnd() < 0.5 ? 1 : -1), dy * 0.7 + dx * 0.7, (steps - s) >> 1, o * 0.7, w0 * 0.8);
+      }
+    };
+    for (let l = 0, nl = N(2600); l < nl; l++) {
+      const k = pickArm();
+      const { r } = armSample(k);
+      const off = -560 - Math.abs(g()) * 300;
+      const [x0, y0] = onArm(k, r, off);
+      const [x1, y1] = onArm(k, r + 120, off);
+      const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+      lane(x0, y0, g() * 50, (x1 - x0) / len, (y1 - y0) / len, 18 + ((rnd() * 40) | 0), 0.35 + 0.45 * rnd(), 120 + 110 * rnd());
+    }
+    // 5b. Пылевые «перья»: тонкие тёмные полосы, отходящие от пылевой кромки наружу поперёк рукава
+    for (const sp of spurs) {
+      const steps = Math.round(sp.len / 70);
+      for (let s = 0; s < steps; s++) {
+        const f = s / steps;
+        const [x, y] = spurPt(sp, f);
+        const o = (sp.feather ? 0.34 : 0.22) * (1 - f) * (0.6 + 0.6 * rnd()) * coreFade(x, y);
+        if (o > 0.004) push(dust, x + g() * 25, y + g() * 25, g() * 30, o * 0.42, o * 0.72, o * 1.3, 110 + 90 * rnd());
       }
     }
     // реальные пылевые комплексы вокруг Солнца: [l°, b°, расстояние св. лет, протяжённость по l°, по b°, число сгустков]
@@ -225,47 +312,34 @@
         }
       }
     }
-    // пылевые полосы на ведущих кромках бара
+    // 5c. Пылевые полосы на ведущих кромках бара: тонкие, резкие, тёмно-бурые, с ответвлениями
+    for (const s of [1, -1]) {
+      for (let l = 0; l < N(60); l++) {
+        const u0 = (rnd() * 2 - 1) * 8500;
+        const v0 = s * (1250 + Math.abs(u0) * 0.07) + g() * 150;
+        const f = MW.util.smoothstep(1500, 4000, Math.abs(u0));
+        if (f < 0.05) continue;
+        const x0 = u0 * cb - v0 * sb, y0 = u0 * sb + v0 * cb;
+        const dir = rnd() < 0.5 ? 1 : -1;
+        lane(x0, y0, g() * 40, cb * dir, sb * dir, 20 + ((rnd() * 30) | 0), (0.4 + 0.4 * rnd()) * f, 140 + 120 * rnd());
+      }
+    }
+    // 6. Подложка светящегося газа — заметно слабее и мельче (без мутной пелены): сапфировый газ гребней
+    //    рукавов и золотистое свечение бара
     for (let i = 0, n = N(9000); i < n; i++) {
-      const s = rnd() < 0.5 ? 1 : -1;
-      const u = (rnd() * 2 - 1) * 9000;
-      const v = s * (1400 + Math.abs(u) * 0.08) + g() * 250;
-      const f = MW.util.smoothstep(1500, 4500, Math.abs(u));   // в самом ядре полосы плавно гаснут
-      if (f > 0.01) push(dust, u * cb - v * sb, u * sb + v * cb, g() * 120, 0.16 * f, 0.2 * f, 0.26 * f, 220 + 250 * rnd());
-    }
-    // 3b. Подложка светящегося газа: сапфировый газ рукавов, золотое свечение балджа — единый вихрь
-    for (let i = 0, n = N(24000); i < n; i++) {
-      const k = rnd() < 0.62 ? (rnd() < 0.5 ? 1 : 3) : (rnd() < 0.5 ? 0 : 2);
-      const { r, phi } = armSample(k);
-      const rr = r + g() * 900;
+      const k = pickArm();
+      const { r } = armSample(k);
+      const [x, y] = onArm(k, r, g() * 500);
       const c = rnd();
-      const b = (0.16 + 0.1 * rnd()) * ARMS[k].strength;
-      push(gas, rr * Math.cos(phi) + g() * 400, rr * Math.sin(phi) + g() * 400, g() * 320, (0.3 + 0.2 * c) * b, (0.55 + 0.2 * c) * b, 1.0 * b, 900 + 1100 * rnd());
+      const b = (0.12 + 0.08 * rnd()) * ARMS[k].strength;
+      push(gas, x + g() * 200, y + g() * 200, g() * 200, (0.3 + 0.2 * c) * b, (0.55 + 0.2 * c) * b, 1.0 * b, 450 + 600 * rnd());
     }
-    for (let i = 0, n = N(5000); i < n; i++) {
-      const u = g() * 3000, v = g() * 1700, z = g() * 1300;
+    for (let i = 0, n = N(4000); i < n; i++) {
+      const u = g() * 4200, v = g() * 1100, z = g() * 900;
       const b = 0.2 + 0.15 * rnd();
-      push(gas, u * cb - v * sb, u * sb + v * cb, z, 1.0 * b, 0.68 * b, 0.32 * b, 1400 + 1800 * rnd());
+      push(gas, u * cb - v * sb, u * sb + v * cb, z, 1.0 * b, 0.72 * b, 0.38 * b, 900 + 1200 * rnd());
     }
-    for (let i = 0, n = N(6000); i < n;) {
-      const R = 3000 + (-12000 * Math.log(rnd() * rnd() + 1e-12));
-      if (R > 60000) continue;
-      i++;
-      const ph = rnd() * TAU, b = 0.05 + 0.04 * rnd();
-      push(gas, R * Math.cos(ph), R * Math.sin(ph), g() * 600, 0.75 * b, 0.72 * b, 0.8 * b, 1500 + 1500 * rnd());
-    }
-    // десятки ярких розово-пурпурных облаков H II вдоль рукавов
-    for (let c = 0; c < 110; c++) {
-      const k = rnd() < 0.65 ? (rnd() < 0.5 ? 1 : 3) : (rnd() < 0.5 ? 0 : 2);
-      const { r, phi } = armSample(k);
-      const rr = r + 300 + g() * 350;
-      const cx = rr * Math.cos(phi), cy = rr * Math.sin(phi), cz = g() * 90;
-      const sz = 150 + 300 * rnd(), w = 1.2 + 1.6 * rnd();
-      push(gas, cx, cy, cz, 0.9 * w, 0.18 * w, 0.55 * w, sz * 2.4);
-      for (let j = 0; j < 28; j++) push(lum, cx + g() * sz * 0.5, cy + g() * sz * 0.5, cz + g() * sz * 0.25, 2.2 * w, 0.5 * w, 1.3 * w, 20 + sz * 0.3 * rnd());
-      for (let j = 0; j < 6; j++) push(lum, cx + g() * sz * 0.4, cy + g() * sz * 0.4, cz + g() * 30, 2.5, 2.9, 3.6, 8 + 15 * rnd());
-    }
-    // 4. Сферическое гало: старые звёзды, плотность ∝ r⁻³ (3 000 … 95 000 св. лет), без сплющивания
+    // 7. Сферическое гало: старые звёзды, плотность ∝ r⁻³ (3 000 … 95 000 св. лет), без сплющивания
     // (гало и шаровые скопления — отдельный буфер: их яркость зависит от того, смотрим ли мы на Галактику снаружи)
     const halo = [];
     const sphere = (r) => { const ct = 2 * rnd() - 1, st = Math.sqrt(1 - ct * ct), ph = rnd() * TAU; return [r * st * Math.cos(ph), r * st * Math.sin(ph), r * ct]; };
@@ -308,7 +382,7 @@
       const r = -R * 0.06 * Math.log(rnd() * rnd() + 1e-9);
       const th = Math.acos(2 * rnd() - 1), ph = rnd() * TAU;
       const b = 0.7 + 0.8 * Math.exp(-r / (R * 0.03));
-      lum.push(r * Math.sin(th) * Math.cos(ph), r * Math.sin(th) * Math.sin(ph), r * Math.cos(th) * 0.65, b, 0.8 * b, 0.55 * b, R * 0.012 + R * 0.015 * rnd());
+      lum.push(r * Math.sin(th) * Math.cos(ph), r * Math.sin(th) * Math.sin(ph), r * Math.cos(th) * 0.65, b, 0.8 * b, 0.55 * b, (R * 0.005 + R * 0.007 * rnd()) * sk);
     }
     for (let i = 0, m = Math.round(n * (1 - bulge) * q); i < m; i++) {
       const arm = rnd() < 0.5 ? 0 : 1;
@@ -317,11 +391,11 @@
       const inArm = rnd() < 0.6;
       const ph = inArm ? arm * Math.PI + Math.log(r / (R * 0.12)) / tp + g() * (0.22 + floc) + 0.25 * Math.sin(r / R * 9 + arm) : rnd() * TAU;
       const x = r * Math.cos(ph), y = r * Math.sin(ph), z = g() * R * 0.012;
-      if (inArm && opts.dust !== false && rnd() < 0.4) dust.push(x * 0.97, y * 0.97, z * 0.5, 0.14, 0.17, 0.22, R * 0.015 + R * 0.01 * rnd());
+      if (inArm && opts.dust !== false && rnd() < 0.4) dust.push(x * 0.97, y * 0.97, z * 0.5, 0.1, 0.16, 0.26, (R * 0.006 + R * 0.006 * rnd()) * sk);
       const blue = inArm ? 0.25 + 0.5 * rnd() : 0;
       const b = (inArm ? 0.85 : 0.45) * (0.6 + 0.6 * rnd());
-      lum.push(x, y, z, (1 - 0.35 * blue) * b, (0.88 - 0.05 * blue) * b, (0.72 + 0.35 * blue) * b, (R * 0.008 + R * 0.014 * rnd()) * sk);
-      if (inArm && rnd() < 0.04) lum.push(x, y, z, 2.0, 0.6, 0.8, R * 0.004);
+      lum.push(x, y, z, (1 - 0.35 * blue) * b, (0.88 - 0.05 * blue) * b, (0.72 + 0.35 * blue) * b, (R * 0.004 + R * 0.007 * rnd()) * sk);
+      if (inArm && rnd() < 0.04) lum.push(x, y, z, 1.6, 0.25, 1.0, R * 0.003 * sk);
     }
     return { lum: new Float32Array(lum), dust: new Float32Array(dust) };
   }
@@ -336,7 +410,7 @@
       if (r > R * 1.6) continue;
       const ct = 2 * rnd() - 1, st = Math.sqrt(1 - ct * ct), ph = rnd() * TAU;
       const b = (faint ? 0.35 : 0.8) * (0.6 + 0.6 * rnd()) * (1 + 1.5 * Math.exp(-r / (R * 0.08)));
-      lum.push(r * st * Math.cos(ph) * a[0], r * st * Math.sin(ph) * a[1], r * ct * a[2], b, 0.84 * b, 0.6 * b, R * (faint ? 0.03 : 0.015) + R * 0.03 * rnd());
+      lum.push(r * st * Math.cos(ph) * a[0], r * st * Math.sin(ph) * a[1], r * ct * a[2], b, 0.84 * b, 0.6 * b, R * (faint ? 0.012 : 0.006) + R * 0.01 * rnd());
     }
     return { lum: new Float32Array(lum), dust: new Float32Array(0) };
   }
@@ -351,7 +425,7 @@
       else { const r = -R * 0.35 * Math.log(rnd() + 1e-9); const ph = rnd() * TAU + 0.6 * Math.sin(r / R * 4); x = r * Math.cos(ph) * 1.15; y = r * Math.sin(ph); z = g() * R * 0.12; }
       const blue = rnd() < 0.35 ? 0.6 : 0.1;
       const b = 0.6 + 0.6 * rnd();
-      lum.push(x, y, z, (1 - 0.3 * blue) * b, (0.88 - 0.02 * blue) * b, (0.75 + 0.35 * blue) * b, R * 0.02 + R * 0.04 * rnd());
+      lum.push(x, y, z, (1 - 0.3 * blue) * b, (0.88 - 0.02 * blue) * b, (0.75 + 0.35 * blue) * b, R * 0.007 + R * 0.014 * rnd());
     }
     // туманность Тарантул (только в БМО — barFrac > 0.3)
     if (barFrac > 0.3) for (let i = 0; i < 400 * q; i++) lum.push(R * 0.32 + g() * R * 0.03, R * 0.12 + g() * R * 0.03, g() * R * 0.02, 2.4, 0.7, 0.9, R * 0.012 + R * 0.01 * rnd());

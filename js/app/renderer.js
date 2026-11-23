@@ -731,15 +731,24 @@
       this.stats.galaxyK = gb;
       const art = this.s.artistic;
       // объёмный газ: в художественном режиме — полноценная светящаяся подложка рукавов
-      this.drawParticles(this.mwGas, MW.C.GC_POS, null, 0.065 * gb * (art ? 0.6 : 0.3), 5.0, false, true);
+      this.drawParticles(this.mwGas, MW.C.GC_POS, null, 0.065 * gb * (art ? 0.4 : 0.2), 5.0, false, true);
       this.drawParticles(this.mwLum, MW.C.GC_POS, null, 0.065 * gb, 8.0, false);
       // гало и шаровые скопления заметны, когда Галактика видна снаружи (вблизи Солнца они не засоряют небо)
       const outside = MW.util.smoothstep(12000, 45000, Math.hypot(zr * 2.2, Math.max(0, Rr - 30000)));
       if (outside > 0.01) this.drawParticles(this.mwHalo, MW.C.GC_POS, null, 0.065 * this.s.galaxyBright * outside, 6.0, false);
       // пока видна фотопанорама, галактики-соседи уже есть на ней — 3D-копии приглушены
-      for (const g of this.extGal) this.drawParticles(g.lum, g.obj.pos, g.model, 0.05 * this.s.galaxyBright * g.bright * (1 - 0.9 * panoK), 6.0, false);
+      // Когда далёкая галактика занимает на экране несколько десятков пикселей, десятки тысяч её частиц
+      // складываются в пересвеченное пятно, а bloom превращает его в «вату». Яркость приводим к постоянной
+      // поверхностной яркости: не больше ~4 частиц на пиксель площади диска.
+      for (const g of this.extGal) {
+        const Dg = Math.max(v3.dist(cp, g.obj.pos), 1);
+        const prG = Math.max(this.pxRadius(g.obj.radius * 1.1, Dg), 1);
+        const kDens = MW.util.clamp(4 / (g.lum.count / (Math.PI * prG * prG)), 0.035, 1);
+        this.drawParticles(g.lum, g.obj.pos, g.model, 0.05 * this.s.galaxyBright * g.bright * kDens * (1 - 0.9 * panoK), 6.0, false);
+      }
       for (const c of this.clusters) if (c.glow) this.drawParticles(c.glow, c.obj.pos, null, 0.08 * this.s.galaxyBright, 3.0, false);
-      this.drawParticles(this.mwDust, MW.C.GC_POS, null, 0.4 * (1 - 0.45 * inside) * (art ? 1.9 : 1.0) * (1 - 0.85 * panoK), 7.0, true);
+      // снаружи (вид на диск) пылевые прожилки контрастнее: они «прорезают» звёздные поля, как на снимках «Хаббла»
+      this.drawParticles(this.mwDust, MW.C.GC_POS, null, 0.4 * (1 - 0.45 * inside) * (1 + 0.6 * outside) * (art ? 1.9 : 1.0) * (1 - 0.85 * panoK), 7.0, true);
       for (const g of this.extGal) if (g.dust) this.drawParticles(g.dust, g.obj.pos, g.model, 0.5, 6.0, true);
 
       // «фокус» на близком теле (планета, спутник, аппарат крупно в кадре): протяжённый фон уменьшается
@@ -876,7 +885,10 @@
       this.glc.bindTarget(null);
       const c = this.pComp.use();
       c.tex('u_scene', src.tex); c.tex('u_bloom', this.mips[0].tex);
-      c.set('u_bloomStr', this.s.bloom); c.set('u_exposure', this.s.exposure);
+      // на галактических масштабах bloom слабее: звёздные россыпи резкие, без мутного ореола
+      const sd = v3.len(this.cam.pos);
+      const galScale = MW.util.smoothstep(4000, 40000, sd) * (1 - MW.util.smoothstep(3e7, 2e8, sd));
+      c.set('u_bloomStr', this.s.bloom * (1 - 0.6 * galScale)); c.set('u_exposure', this.s.exposure);
       c.set('u_time', this.scene.realTime); c.set('u_vignette', 0.35); c.set('u_art', this.s.artistic ? 1 : 0);
       this.glc.fullscreen();
     }
