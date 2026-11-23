@@ -432,9 +432,9 @@
       for (const sys of this.scene.systems) {
         const st = sys.star;
         const D = v3.dist(cam, st.pos);
-        if (sys.isSolar) {
-          const pr = this.pxRadius(st.radius, D);
-          if (pr < 3) add(st.pos, st.color, st.absMag);
+        {
+          const pr = this.pxRadius(st.radius || (st.radiusSun || 1) * MW.C.RSUN_LY, D);
+          if (pr < 3 && st.absMag !== undefined) add(st.pos, st.color || [1, 1, 1], st.absMag);
         }
         for (const b of sys.bodies) {
           const d = v3.dist(cam, b.pos);
@@ -483,6 +483,7 @@
       p.set('u_temp', st.temp || 5800); p.set('u_seed', vis.seed); p.set('u_bright', vis.bright);
       p.set('u_gran', vis.gran); p.set('u_activity', vis.activity); p.set('u_corona', vis.corona);
       p.set('u_kind', vis.kind); p.set('u_flat', vis.flat);
+      p.set('u_rnd', f32(vis.rnd || [vis.seed, 0.5, 0.5, 0.5]));
       this.glc.blendPremul();
       this.gl.bindVertexArray(this.quadVAO || (this.quadVAO = this.glc.vao([], true)));
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
@@ -507,7 +508,7 @@
           const img = new Image();
           img.onload = () => {
             const gl = this.gl, t = gl.createTexture();
-            const lin = /_(aux|nrm)$/.test(id);
+            const lin = /_(aux|nrm|mask)$/.test(id);
             gl.bindTexture(gl.TEXTURE_2D, t);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
             gl.texImage2D(gl.TEXTURE_2D, 0, lin ? gl.RGBA8 : gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
@@ -576,7 +577,8 @@
       p.set('u_col1', f32(b.col1 || td.col1 || [0.5, 0.5, 0.5])); p.set('u_col2', f32(b.col2 || td.col2 || [0.6, 0.6, 0.6])); p.set('u_col3', f32(b.col3 || [0.4, 0.4, 0.4]));
       const par = b.par || [0, 0, 0, 0];
       p.set('u_par', f32([par[0], par[1], b.clouds !== undefined ? b.clouds : par[2], b.turb || par[3] || 0]));
-      p.set('u_par2', f32([b.feature || 0, b.bands || 12, 0, 0]));
+      p.set('u_par2', f32([b.feature || 0, b.bands || 12, b.par2z || 0, 0]));
+      p.set('u_rnd', f32(b.rnd || (b.rnd = MW.procsystem.objRnd(b))));
       p.set('u_atmo', f32(atmo)); p.set('u_atmoDens', b.atmoDens || 0);
       p.set('u_ring', f32(ring)); p.set('u_ringCol', f32(b.ringCol || [0.7, 0.65, 0.55]));
       p.tex('u_earth', this.earthTex);
@@ -592,8 +594,17 @@
       const rm = tR && tR.meta ? tR.meta : { r0: 1, r1: 2 };
       p.set('u_texQ', f32([Math.max(D - R, 0) / R, this.texFade(tR), rm.r0, rm.r1]));
       p.set('u_nrmK', this.texFade(tN));
+      // детальная карта: насколько тексель крупнее пикселя (при подлёте в упор) и частота дорисовываемого шума
+      const rawLod = tC ? Math.log2(Math.max(foot, 0.5 / Math.max(pr, 1)) * tC.w / (2 * Math.PI)) : 0;
+      p.set('u_detail', f32(tC ? [MW.util.clamp(-rawLod / 3, 0, 1) * kC, tC.w / (2 * Math.PI) * 2.5] : [0, 0]));
+      // палитра снятой стороны мозаики — для достройки неотснятых районов
+      const fill = tC && tC.meta && tC.meta.fill;
+      if (fill) {
+        const lin = (c) => f32(c.map((x) => Math.pow(x, 2.2)));
+        p.set('u_col1', lin(fill[0])); p.set('u_col2', lin(fill[1]));
+      }
       // дымка атмосферы над диском: у плотных атмосфер (Венера, Титан) — вся, у Земли — лёгкая, у остальных — только на лимбе
-      p.set('u_hazeFloor', b.type === 1 || b.type === 11 ? 1.0 : b.type === 2 ? 0.3 : b.type === 3 ? 0.25 : 0.06);
+      p.set('u_hazeFloor', b.hazeFloor !== undefined ? b.hazeFloor : b.type === 1 || b.type === 11 ? 1.0 : b.type === 2 ? 0.3 : b.type === 3 ? 0.25 : 0.06);
       this.glc.blendPremul();
       this.gl.bindVertexArray(this.quadVAO || (this.quadVAO = this.glc.vao([], true)));
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
@@ -757,9 +768,11 @@
       let hideCat = -1;
       const hideLocal = [-1, -1, -1];
       let hideHyg = -1;
+      // Звезда активной системы (цель автопилота) не берётся из общих буферов: там позиции абсолютные во float32,
+      // и на расстоянии ~1000 св. лет погрешность ~1e-4 св. года — при подлёте её свечение «скакало» по экрану.
+      // Вместо этого она рисуется в буфере ближних спрайтов с координатами относительно камеры (double).
       if (actStar) {
-        const big = this.pxRadius(actStar.radius, v3.dist(cam.pos, actStar.pos)) > 2.5;
-        if (big) { if (actStar.procedural) hideLocal[actStar.level] = actStar.index; else if (actStar.hyg) hideHyg = actStar.hygIdx; else if (actStar.idx !== undefined) hideCat = actStar.idx; }
+        if (actStar.procedural) hideLocal[actStar.level] = actStar.index; else if (actStar.hyg) hideHyg = actStar.hygIdx; else if (actStar.idx !== undefined) hideCat = actStar.idx;
       }
       for (let i = 0; i < sc.local.levels.length; i++) {
         const L = sc.local.levels[i];

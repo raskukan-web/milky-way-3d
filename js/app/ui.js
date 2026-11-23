@@ -229,7 +229,20 @@
       this.cardRows = this.rows(o);
       this.renderRows();
       this.renderFacts(o);
+      this.renderWhy(o);
       this.renderChips(o);
+    }
+    // блок «Почему так выглядит»: облик экзопланеты выведен из её реальных параметров
+    renderWhy(o) {
+      const box = $('#cardWhy');
+      box.innerHTML = '';
+      if (!o.why || !o.why.length) { box.style.display = 'none'; return; }
+      box.style.display = '';
+      const h = document.createElement('div'); h.className = 'factsTitle'; h.textContent = '🔬 Почему так выглядит';
+      box.appendChild(h);
+      const ul = document.createElement('ul');
+      for (const t of o.why) { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); }
+      box.appendChild(ul);
     }
     // кнопки-«чипы» планет системы выбранной звезды (система генерируется сразу по клику) или спутников планеты
     renderChips(o) {
@@ -324,7 +337,7 @@
         if (o.aKm) R.push(['Орбита', Math.round(o.aKm).toLocaleString('ru-RU') + ' км']);
         if (o.period) R.push(['Период', o.period]);
         else if (o.periodD) R.push(['Период', Math.abs(o.periodD).toFixed(2) + ' сут']);
-        if (o.rotH) R.push(['Сутки', Math.abs(o.rotH).toFixed(1) + ' ч' + (o.rotH < 0 ? ' (обратное)' : '')]);
+        if (o.rotH) R.push([o.rotEst ? 'Сутки (оценка)' : o.locked ? 'Сутки (захват)' : 'Сутки', Math.abs(o.rotH).toFixed(1) + ' ч' + (o.rotH < 0 ? ' (обратное)' : '')]);
         if (o.exoReal && o.radiusE) R.push(['Радиус (R⊕)', o.radiusE.toFixed(2) + (o.radiusEst ? ' (оценка по массе)' : '')]);
         if (o.exoReal && o.massE) R.push(['Масса (M⊕)', U.fmtNum(o.massE, o.massE < 10 ? 2 : 1)]);
         if (o.exoReal && o.ecc) R.push(['Эксцентриситет', o.ecc.toFixed(3)]);

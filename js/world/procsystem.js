@@ -42,16 +42,26 @@
     if (T >= 5300) return 1;
     return 0;
   }
+  // Четыре независимых случайных числа объекта из хэша его ID и имени: сдвиг и поворот координат шума,
+  // масштаб ячеек, рисунок пятен/материков/штормов. Два разных объекта не получают одинаковый узор.
+  function objRnd(o) {
+    const r = MW.rng.mulberry32(MW.rng.hashStr(String(o.id || '') + '|' + String(o.name || '')) ^ 0x2545f491);
+    r(); r();
+    return [r(), r(), r(), r()];
+  }
   // Визуальные параметры звезды для шейдера
   function starVisual(star) {
     const R = star.radiusSun || 1, T = star.temp || 5800;
     const kind = starKind(star);
-    const seed = ((star.seed || MW.rng.hashStr(star.id || star.name || 'x')) % 9973) / 9973;
-    const v = { kind, seed, flat: 0, corona: 1, bright: 2.0, spin: 0.01, gran: 90, activity: 0.6 };
-    if (kind === 0) { v.gran = MW.util.clamp(14 + 18 * R, 14, 34); v.activity = T < 3900 ? 1.3 : 1.0; }
-    else if (kind === 1) { v.gran = MW.util.clamp(90 / (1 + 2.6 * Math.max(0, Math.log10(Math.max(R, 0.1)))), 18, 120); v.activity = MW.util.clamp(1.1 - (T - 5300) / 1800, 0.25, 0.8); }
+    const rnd = objRnd(star);
+    const seed = rnd[0];
+    const v = { kind, seed, rnd, flat: 0, corona: 1, bright: 2.0, spin: 0.01, gran: 90, activity: 0.6 };
+    // масштаб конвективных ячеек и активность (площадь пятен) у каждой звезды свои
+    const gk = 0.75 + 0.5 * rnd[3], ak = 0.6 + 0.8 * rnd[2];
+    if (kind === 0) { v.gran = MW.util.clamp(14 + 18 * R, 14, 34) * gk; v.activity = (T < 3900 ? 1.3 : 1.0) * ak; }
+    else if (kind === 1) { v.gran = MW.util.clamp(90 / (1 + 2.6 * Math.max(0, Math.log10(Math.max(R, 0.1)))), 18, 120) * gk; v.activity = MW.util.clamp(1.1 - (T - 5300) / 1800, 0.25, 0.8) * ak; }
     else if (kind === 2) { v.gran = 30; v.activity = 0; v.bright = 2.6; v.spin = 0.05; v.flat = FLAT[star.id] ?? (R < 4 ? 0.06 : 0.02); v.corona = 1.0; }
-    else if (kind === 3) { v.gran = 2.6; v.activity = 0; v.bright = 1.7; v.spin = 0.003; }
+    else if (kind === 3) { v.gran = 2.6 * (0.8 + 0.4 * rnd[3]); v.activity = 0; v.bright = 1.7; v.spin = 0.003; }
     else { v.gran = 0; v.activity = 0; v.bright = 3.2; v.spin = 0.1; }
     v.kindName = KIND_NAMES[kind];
     return v;
@@ -221,43 +231,134 @@
     gasWarm: [[0.94, 0.78, 0.52], [0.44, 0.24, 0.11], [1.0, 0.9, 0.7]],
     hotJ: [[0.52, 0.15, 0.08], [0.14, 0.035, 0.03], [0.86, 0.42, 0.18]],
   };
-  // p.exo = [стиль, тепловое свечение, длина хвоста (R), ободок]; стили: 1 гигант/нептун, 2 горячий юпитер, 3 лавовый, 4 каменный
+  // Цвет рассеяния у лимба и цвет океанов — по спектру звезды: свет красного карлика даёт персиково-оранжевый
+  // ободок и тёмные океаны, жёлтой звезды — золотисто-голубой, горячей F/A — ярко-синий.
+  function starTint(teff) {
+    if (teff < 3900) return { rim: [1.0, 0.6, 0.36], ocean: [0.014, 0.03, 0.045], atmo: [1.0, 0.64, 0.42], name: 'красного карлика (M)', glow: 'персиково-оранжевый' };
+    if (teff < 5200) return { rim: [1.0, 0.8, 0.55], ocean: [0.012, 0.04, 0.085], atmo: [0.95, 0.78, 0.62], name: 'оранжевого карлика (K)', glow: 'тёплый янтарный' };
+    if (teff < 6000) return { rim: [0.72, 0.82, 1.0], ocean: [0.012, 0.05, 0.13], atmo: [0.42, 0.62, 1.0], name: 'жёлтой звезды (G)', glow: 'золотисто-голубой' };
+    return { rim: [0.36, 0.58, 1.0], ocean: [0.008, 0.06, 0.18], atmo: [0.3, 0.52, 1.0], name: 'горячей звезды (F/A)', glow: 'ярко-синий' };
+  }
+  const fmtP = (P) => (P < 2 ? P.toFixed(2) : P < 20 ? P.toFixed(1) : Math.round(P)) + ' сут';
+  /* Облик экзопланеты рассчитывается из её реальных параметров (NASA Exoplanet Archive):
+     Tэкв, период/расстояние (→ приливный захват и скорость вращения), масса, радиус, спектр звезды.
+     p.exo = [стиль, тепловое свечение, длина хвоста (R), ободок]; стили: 1 гигант/нептун, 2 горячий юпитер,
+     3 лавовый мир, 4 каменный, 5 горячий мир в приливном захвате, 6 «глазное яблоко».
+     p.par2z: у газовых — медленность вращения (0 быстрое … 1 захват), у каменных — резкость рельефа.
+     p.why — пояснение для карточки: почему планета выглядит именно так. */
   function classify(p) {
-    const R = p.radiusE, T = p.teq ?? 300, M = p.massE;
-    const s = p.seed;
-    if (R >= 8 || (M && M >= 60)) {
-      p.type = 14; p.bands = 14 + Math.round(s * 10); p.turb = T > 1000 ? 1.4 : 0.9; p.atmo = [0.85, 0.8, 0.75, 0.015]; p.atmoDens = 2.5;
+    const R = p.radiusE, T = p.teq ?? 300, s = p.seed;
+    const teff = p.hostTeff || 5800, tint = starTint(teff);
+    const P = p.periodD || 365;
+    const M = p.massE || (R < 1.6 ? Math.pow(R, 3.7) : null);
+    const Mtxt = M ? (M < 10 ? M.toFixed(2) : Math.round(M)) + ' M⊕' + (p.massE ? '' : ' (оценка)') : '';
+    // приливный захват: на коротких орбитах вращение синхронизируется за время много меньше возраста системы
+    const locked = P < 20 || (p.aAU && p.aAU < 0.06);
+    const Tss = Math.round(T * Math.SQRT2);   // подсолнечная точка при захвате без переноса тепла
+    const why = []; p.why = why; p.locked = locked;
+    const giant = R >= 8 || (p.massE && p.massE >= 60);
+    // осевое вращение: при захвате сутки = году; иначе оценка по аналогии с Солнечной системой
+    if (locked) { p.rotH = P * 24; p.rotEst = false; }
+    else { p.rotH = giant ? 9 + 7 * s : R >= 1.6 ? 14 + 6 * s : 18 + 22 * s; p.rotEst = true; }
+    const fast = !locked && p.rotH < 15;
+    if (giant || R >= 1.6) {
+      // ---- газовые гиганты и нептуны: вращение задаёт структуру облаков
+      p.par2z = locked ? 1 : fast ? 0 : 0.35;
+      const nb = locked ? 4 + Math.round(s * 3) : fast ? 18 + Math.round(s * 12) : 10 + Math.round(s * 5);
+      p.bands = nb;
+      if (locked) why.push('Приливный захват (период ' + fmtP(P) + '): сутки равны году, вращение медленное — сила Кориолиса слабая, поэтому вместо узких полос несколько широких зон, гигантские спиральные циклоны и шевронные облачные волны.');
+      else why.push('Вращение не захвачено; период оценён по аналогии с Юпитером и Нептуном (~' + p.rotH.toFixed(0) + ' ч). ' + (fast ? 'Быстрое вращение рвёт атмосферу на ' + nb + ' тонких контрастных широтных поясов с мелкими вихрями.' : 'Умеренное вращение — ' + nb + ' широких поясов.'));
+    }
+    if (giant) {
+      p.type = 14; p.turb = T > 1000 ? 1.4 : 0.9; p.atmo = [0.85, 0.8, 0.75, 0.015]; p.atmoDens = 2.5;
       if (T > 1000) {
         [p.col1, p.col2, p.col3] = EXO_PAL.hotJ;
         p.exo = [2, MW.util.clamp((T - 900) / 1100, 0.25, 1.3), T > 1200 ? 7 : 0, 0.7]; p.rim = [1.0, 0.5, 0.25]; p.atmo = [1.0, 0.5, 0.3, 0.03]; p.atmoDens = 3;
+        why.push('Tэкв ' + Math.round(T) + ' K: дневная сторона светится в ИК, горячее пятно смещено ветрами на восток' + (T > 1200 ? ', а излучение звезды сдувает с планеты газовый шлейф.' : '.'));
         return 'Горячий юпитер';
       }
       [p.col1, p.col2, p.col3] = T > 400 ? EXO_PAL.gasWarm : T > 150 ? EXO_PAL.gasCold : EXO_PAL.gasPale;
-      p.exo = [1, 0, 0, 0.6]; p.rim = T > 150 ? [0.95, 0.85, 0.7] : [0.6, 0.78, 1.0];
+      p.exo = [1, 0, 0, 0.6];
+      const rim0 = T > 150 ? [0.95, 0.85, 0.7] : [0.6, 0.78, 1.0];
+      p.rim = rim0.map((c, i) => 0.7 * c + 0.3 * tint.rim[i]);
+      why.push('Tэкв ' + Math.round(T) + ' K: ' + (T > 400 ? 'облака силикатов и сульфидов — охристо-шоколадные пояса.' : T > 150 ? 'аммиачные облака — кремово-охристые пояса, как у Юпитера.' : 'холодная водородная атмосфера с метаном — бледно-голубые тона.') + ' Ободок — ' + tint.glow + ' (свет ' + tint.name + ').');
       return T > 400 ? 'Тёплый газовый гигант' : 'Газовый гигант';
     }
     if (R >= 1.6) {
-      p.type = 17; p.turb = 0.9; p.bands = (R >= 4 ? 9 : 7) + Math.round(s * 6);
+      p.type = 17; p.turb = 0.9;
       [p.col1, p.col2, p.col3] = T > 600 ? EXO_PAL.iceWarm : T > 200 ? EXO_PAL.iceTeal : EXO_PAL.iceCold;
-      p.rim = T > 600 ? [1.0, 0.78, 0.5] : [0.45, 0.75, 1.0];
+      const rim0 = T > 600 ? [1.0, 0.78, 0.5] : [0.45, 0.75, 1.0];
+      p.rim = rim0.map((c, i) => 0.6 * c + 0.4 * tint.rim[i]);
       p.exo = [1, 0, 0, R >= 4 ? 1.0 : 1.2];
       p.atmo = T > 600 ? [1.0, 0.8, 0.55, 0.035] : [0.45, 0.7, 1.0, 0.035]; p.atmoDens = R >= 4 ? 5 : 6;
+      why.push('Радиус ' + R.toFixed(1) + ' R⊕ — больше предела ~1,6 R⊕: планета удерживает водородно-гелиевую оболочку, поверхности не видно. ' + (T > 600 ? 'Жарко (Tэкв ' + Math.round(T) + ' K) — янтарные облака.' : 'Метан поглощает красный свет — бирюзово-синие тона.'));
       if (R >= 4) return T > 600 ? 'Тёплый нептун' : 'Нептуноподобная планета (ледяной гигант)';
       return 'Мини-нептун: каменное ядро под плотной водородной оболочкой';
     }
-    p.bump = 6;
-    if (T > 1000) { p.type = 15; p.exo = [3, MW.util.clamp((T - 800) / 1000, 0.4, 1.6), 0, 0.5]; p.rim = [1.0, 0.45, 0.2]; p.atmo = [1.0, 0.45, 0.2, 0.03]; p.atmoDens = 2.5; return 'Лавовый мир (кора плавится, Tэкв > 1000 K)'; }
-    if (T > 400) { p.type = 13; p.exo = [4, 0, 0, 0.3]; p.rim = [1.0, 0.75, 0.5]; p.col1 = [0.52, 0.38, 0.26]; p.col2 = [0.7, 0.55, 0.4]; p.par = [-10, -0.5, 0, 0]; p.atmo = [0.95, 0.7, 0.45, 0.025]; p.atmoDens = 2; return 'Горячая каменная планета'; }
-    if (T > 180) {
-      p.type = 12; p.exo = [4, 0, 0, 0.6]; p.rim = [0.45, 0.7, 1.0];
-      p.col1 = [0.3, 0.26, 0.2]; p.col2 = [0.52, 0.44, 0.33]; p.col3 = [0.012, 0.05, 0.13];
-      const temp = (T - 255) / 110;
-      p.par = [T > 320 ? -0.15 : 0.02, temp, 0.14, 0]; p.clouds = 0.14;
-      p.atmo = [0.32, 0.56, 1.0, 0.03]; p.atmoDens = 8;
+    // ---- каменные планеты: гравитация (масса) задаёт рельеф и плотность атмосферы
+    const light = M !== null && M < 1.2, superE = M !== null && M >= 2;
+    p.par2z = light ? 1.0 : superE ? 0.15 : 0.5;
+    p.bump = light ? 9 : superE ? 3 : 6;
+    p.hazeFloor = light ? 0.02 : superE ? 0.32 : 0.08;
+    const massWhy = () => {
+      if (light) why.push('Малая масса (' + Mtxt + '): слабая гравитация не удерживает плотную атмосферу — резкий кратерированный и горный рельеф, лишь разреженная дымка.');
+      else if (superE) why.push('Суперземля (' + Mtxt + '): сильная гравитация сглаживает рельеф и удерживает плотную многослойную атмосферу — диск подёрнут дымкой.');
+      else if (Mtxt) why.push('Масса ' + Mtxt + ' — близко к земной: умеренный рельеф и атмосфера.');
+    };
+    const atmoK = light ? 0.3 : superE ? 1.7 : 1.0;
+    if (T > 1000) {
+      p.type = 15; p.exo = [3, MW.util.clamp((T - 800) / 1000, 0.4, 1.6), 0, 0.5]; p.rim = [1.0, 0.45, 0.2]; p.atmo = [1.0, 0.45, 0.2, 0.03]; p.atmoDens = 2.5;
+      why.push('Tэкв ' + Math.round(T) + ' K — выше температуры плавления базальта: кора плавится, по поверхности текут реки лавы' + (locked ? ', под звездой — магматический океан (приливный захват).' : '.'));
+      massWhy();
+      return 'Лавовый мир (кора плавится, Tэкв > 1000 K)';
+    }
+    if (locked && T > 400) {
+      // горячий мир в приливном захвате: раскалённая подсолнечная область, остывшая кора к терминатору
+      p.type = 13; p.bump = Math.max(p.bump, 6);
+      const glow = MW.util.clamp((Tss - 520) / 650, 0.15, 1.4);
+      p.exo = [5, glow, 0, 0.35]; p.rim = [1.0, 0.72, 0.32]; p.atmo = [0.95, 0.8, 0.38, 0.025]; p.atmoDens = 1.6 * atmoK;
+      p.col1 = [0.07, 0.06, 0.055]; p.col2 = [0.2, 0.17, 0.13]; p.hazeFloor = Math.max(p.hazeFloor, 0.1);
+      why.push('Приливный захват (период ' + fmtP(P) + '): одна сторона всегда обращена к звезде, подсолнечная точка разогрета до ~' + Tss + ' K' +
+        (Tss > 800 ? ' — выше точки Дрейпера (~800 K): в трещинах коры светится багровый расплав.' : ' — на пределе красного каления: в трещинах лишь тусклое багровое свечение.') +
+        ' К терминатору — остывшая тёмная вулканическая кора и сернистая дымка; плотную атмосферу сдувает излучение и звёздный ветер.');
+      massWhy();
+      return 'Горячий каменный мир в приливном захвате';
+    }
+    if (locked && T > 150) {
+      // «глазное яблоко»: лёд везде, кроме талого океана под звездой и шапки облаков над ним
+      p.type = 12; p.exo = [6, 0, 0, 0.6];
+      const oceanCos = MW.util.clamp(0.95 - (T - 150) / 200 * 1.1, -0.15, 0.92);
+      p.par = [oceanCos, 0, 0.2, 0]; p.clouds = 0.2;
+      p.col3 = tint.ocean.slice(); p.rim = tint.rim.slice(); p.atmo = [...tint.atmo, 0.03]; p.atmoDens = 6 * atmoK;
       p.interp = true;
+      why.push('Приливный захват у ' + tint.name + ' (период ' + fmtP(P) + '): «планета — глазное яблоко». Ночная сторона и края дня скованы ледяным панцирем; открытый тёмно-синий океан — только вокруг подсолнечной точки (~' + Tss + ' K), над ним постоянная шапка конвективных облаков.');
+      why.push('Свечение лимба и цвет океана — ' + tint.glow + ': так рассеивается свет ' + tint.name + '.');
+      massWhy();
+      return 'Холодный мир в приливном захвате («глазное яблоко»)';
+    }
+    if (T > 400) {
+      p.type = 13; p.exo = [4, 0, 0, 0.3]; p.rim = [1.0, 0.75, 0.5];
+      const hue = s * 0.12;
+      p.col1 = [0.3 + hue, 0.15, 0.075]; p.col2 = [0.6 + hue * 0.5, 0.36, 0.19]; p.par = [-10, -0.5, 0, 0]; p.atmo = [0.95, 0.7, 0.45, 0.025]; p.atmoDens = 2 * atmoK;
+      why.push('Tэкв ' + Math.round(T) + ' K, вращение не захвачено: выжженная пустыня без воды, ржаво-охристые оксиды.');
+      massWhy();
+      return 'Горячая каменная планета';
+    }
+    if (T > 180) {
+      p.type = 12; p.exo = [4, 0, 0, 0.6]; p.rim = tint.rim.slice();
+      p.col1 = [0.3, 0.26, 0.2]; p.col2 = [0.52, 0.44, 0.33]; p.col3 = tint.ocean.slice();
+      const temp = (T - 255) / 110;
+      p.par = [T > 320 ? -0.15 : 0.02, temp, 0.14, 0]; p.clouds = superE ? 0.24 : 0.14;
+      p.atmo = [...tint.atmo, superE ? 0.05 : 0.03]; p.atmoDens = 8 * atmoK;
+      p.interp = true;
+      why.push('Tэкв ' + Math.round(T) + ' K — в диапазоне жидкой воды; ободок и океаны — ' + tint.glow + ' (свет ' + tint.name + ').');
+      massWhy();
       return 'Каменная планета умеренной температуры';
     }
-    p.type = 16; p.exo = [4, 0, 0, 0.2]; p.rim = [0.7, 0.85, 1.0]; return 'Холодная (ледяная) каменная планета';
+    p.type = 16; p.exo = [4, 0, 0, 0.2]; p.rim = tint.rim.map((c) => 0.5 * c + 0.4); p.atmoDens = 0;
+    why.push('Tэкв ' + Math.round(T) + ' K — ниже точки замерзания: поверхность из водяного и азотного льда с трещинами.');
+    massWhy();
+    return 'Холодная (ледяная) каменная планета';
   }
   function buildNasaPlanets(sys, star, rnd, planeN) {
     const H = star.exoNasa;
@@ -269,7 +370,7 @@
       if (!P && a) P = 365.25 * Math.sqrt(a * a * a / mStar);
       if (!a || !P) return;
       const p = { kind: 'planet', system: sys, seed: rnd(), exoReal: true, name, id: star.id + '_p' + i, aAU: a, periodD: P, ecc: e || 0,
-        massE: mE, radiusE: rE || (mE ? radiusFromMass(mE) : 1), radiusEst: !rE, discYear: year, method, insol,
+        massE: mE, radiusE: rE || (mE ? radiusFromMass(mE) : 1), radiusEst: !rE, discYear: year, method, insol, hostTeff: teff,
         teq: teq ?? Math.round(teff * Math.sqrt(rStarAU / (2 * a)) * Math.pow(0.7, 0.25)), teqEst: teq === null || teq === undefined,
         src: 'NASA Exoplanet Archive (pscomppars)' };
       p.desc = classify(p);
@@ -280,7 +381,7 @@
       p.period = P < 700 ? P.toFixed(2) + ' сут' : (P / 365.25).toFixed(1) + ' лет';
       const fr = randomFrame(rnd, planeN, 2);
       p.frame = MW.solar.bodyFrame(v3.norm(v3.rotAxis(fr.z, fr.x, rnd.range(0, 25) * DEG))); p.pole = p.frame.z;
-      p.rotH = P * 24;
+      // p.rotH задан в classify(): при приливном захвате — орбитальный период, иначе оценка
       const ecc = Math.min(p.ecc, 0.95), ph0 = rnd() * Math.PI * 2, w0 = rnd() * Math.PI * 2;
       p.orbitFn = (jd) => {
         const M = (2 * Math.PI * (jd - 2451545.0)) / P + ph0;
@@ -289,6 +390,7 @@
         const cw = Math.cos(w0), sw = Math.sin(w0);
         return v3.add(v3.scale(fr.x, xr * cw - yr * sw), v3.scale(fr.y, xr * sw + yr * cw));
       };
+      p.rnd = objRnd(p);
       p.info = p.desc + '. Тип выбран по измеренным ' + (rE ? 'радиусу' : 'массе (радиус оценён)') + (mE ? ', массе' : '') + ' и температуре; ' +
         (p.interp ? 'океаны, облака и полярные шапки — художественная интерпретация (вода и атмосфера не измерены); ' : 'рисунок облаков и рельефа — художественная визуализация; ') +
         'наклон орбиты и ориентация показаны условно.';
@@ -335,5 +437,5 @@
     }
   }
 
-  MW.procsystem = { generateSystem, starVisual, starKind };
+  MW.procsystem = { generateSystem, starVisual, starKind, objRnd, starTint };
 })();

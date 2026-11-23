@@ -63,12 +63,12 @@
       bands: 16, turb: 0.5, feature: 3, ring: [1.11, 2.35, 1.0, 1], ringCol: [0.8, 0.72, 0.6], atmo: [0.85, 0.78, 0.6, 0.01], atmoDens: 2,
       info: 'Газовый гигант со знаменитыми кольцами из водяного льда шириной ~280 000 км и толщиной порядка 10 м.', mass: '95.2 M⊕', period: '29.46 лет' },
     { id: 'uranus', tex: 'uranus', w0: 203.81, wd: -501.1600928, name: 'Уран', radiusKm: 25362, rotH: -17.24, pole: [257.31, -15.18], type: 6, col1: [0.66, 0.85, 0.88], col2: [0.58, 0.79, 0.84], col3: [0.6, 0.78, 0.82],
-      bands: 10, turb: 0.15, feature: 0, ring: [1.6, 4.05, 1.0, 2], ringCol: [0.5, 0.5, 0.52], atmo: [0.6, 0.85, 0.95, 0.02], atmoDens: 3,
+      bands: 10, turb: 0.15, feature: 0, ring: [1.45, 4.05, 1.0, 2], ringCol: [0.5, 0.5, 0.52], atmo: [0.6, 0.85, 0.95, 0.02], atmoDens: 3,
       info: 'Ледяной гигант, «лежащий на боку»: ось наклонена на 98°. Метан придаёт атмосфере голубовато-зелёный цвет.', mass: '14.5 M⊕', period: '84 года' },
     { id: 'neptune', tex: 'neptune', w0: 249.978, wd: 541.1397757, name: 'Нептун', radiusKm: 24622, rotH: 16.11, pole: [299.36, 43.46], type: 7, col1: [0.33, 0.5, 0.92], col2: [0.22, 0.36, 0.8], col3: [0.3, 0.45, 0.85],
       bands: 12, turb: 0.6, feature: 2, atmo: [0.35, 0.5, 1.0, 0.02], atmoDens: 3,
       info: 'Самая дальняя планета; сильнейшие ветра в Солнечной системе (до 2100 км/ч) и тёмные вихри.', mass: '17.1 M⊕', period: '164.8 лет' },
-    { id: 'pluto', name: 'Плутон', radiusKm: 1188.3, rotH: -153.2935, pole: [132.993, -6.163], type: 16, bump: 3, tex: 'pluto', texH: 0.1, w0: 302.695, wd: 56.3625225,
+    { id: 'pluto', name: 'Плутон', radiusKm: 1188.3, rotH: -153.2935, pole: [132.993, -6.163], type: 16, bump: 3, tex: 'pluto', texAux: 'pluto_mask', texH: 0.1, w0: 302.695, wd: 56.3625225,
       atmo: [0.55, 0.7, 1.0, 0.01], atmoDens: 0.4, dwarf: true, desc: 'Карликовая планета',
       info: 'Карликовая планета пояса Койпера. «Сердце» — равнина Спутника из азотного льда; тонкая голубая дымка атмосферы (New Horizons, 2015).', mass: '0.0022 M⊕', period: '248 лет' },
   ];
@@ -77,13 +77,13 @@
   const MOONS = [
     { id: 'moon', tex: 'moon', texH: 0.14, name: 'Луна', parent: 'earth', aKm: 384400, periodD: 27.3217, radiusKm: 1737.4, type: 8, incl: 5.145, bump: 3, info: 'Единственный естественный спутник Земли. Тёмные пятна — базальтовые «моря».' },
     { id: 'io', tex: 'io', texH: 0.08, name: 'Ио', parent: 'jupiter', aKm: 421700, periodD: 1.769, radiusKm: 1821.6, type: 9, bump: 3, info: 'Самое вулканически активное тело Солнечной системы.' },
-    { id: 'europa', tex: 'europa', texH: 0.08, name: 'Европа', parent: 'jupiter', aKm: 671034, periodD: 3.551, radiusKm: 1560.8, type: 10, bump: 3, info: 'Ледяная кора скрывает подлёдный океан — кандидат на поиск жизни.' },
-    { id: 'ganymede', tex: 'ganymede', texH: 0.1, name: 'Ганимед', parent: 'jupiter', aKm: 1070412, periodD: 7.155, radiusKm: 2634.1, type: 0, col1: [0.45, 0.42, 0.38], col2: [0.7, 0.67, 0.62], bump: 5, info: 'Крупнейший спутник в Солнечной системе, больше Меркурия.' },
-    { id: 'callisto', tex: 'callisto', texH: 0.12, name: 'Каллисто', parent: 'jupiter', aKm: 1882709, periodD: 16.689, radiusKm: 2410.3, type: 0, col1: [0.25, 0.22, 0.2], col2: [0.5, 0.47, 0.42], bump: 7, info: 'Одна из самых кратерированных поверхностей.' },
+    { id: 'europa', tex: 'europa', texAux: 'europa_mask', texH: 0.08, name: 'Европа', parent: 'jupiter', aKm: 671034, periodD: 3.551, radiusKm: 1560.8, type: 10, bump: 3, info: 'Ледяная кора скрывает подлёдный океан — кандидат на поиск жизни.' },
+    { id: 'ganymede', tex: 'ganymede', texAux: 'ganymede_mask', texH: 0.1, name: 'Ганимед', parent: 'jupiter', aKm: 1070412, periodD: 7.155, radiusKm: 2634.1, type: 0, col1: [0.45, 0.42, 0.38], col2: [0.7, 0.67, 0.62], bump: 5, info: 'Крупнейший спутник в Солнечной системе, больше Меркурия.' },
+    { id: 'callisto', tex: 'callisto', texAux: 'callisto_mask', texH: 0.12, name: 'Каллисто', parent: 'jupiter', aKm: 1882709, periodD: 16.689, radiusKm: 2410.3, type: 0, col1: [0.25, 0.22, 0.2], col2: [0.5, 0.47, 0.42], bump: 7, info: 'Одна из самых кратерированных поверхностей.' },
     { id: 'titan', tex: 'titan', name: 'Титан', parent: 'saturn', aKm: 1221870, periodD: 15.945, radiusKm: 2574.7, type: 11, atmo: [0.95, 0.6, 0.25, 0.12], atmoDens: 7, info: 'Плотная азотная атмосфера, метановые моря и дожди.' },
     { id: 'enceladus', tex: 'enceladus', texH: 0.1, name: 'Энцелад', parent: 'saturn', aKm: 237948, periodD: 1.37, radiusKm: 252.1, type: 16, bump: 3, info: 'Гейзеры водяного льда бьют из «тигровых полос» южного полюса.' },
     { id: 'rhea', name: 'Рея', parent: 'saturn', aKm: 527108, periodD: 4.518, radiusKm: 763.8, type: 0, col1: [0.6, 0.6, 0.6], col2: [0.8, 0.8, 0.78], bump: 6, info: 'Второй по величине спутник Сатурна.' },
-    { id: 'triton', tex: 'triton', texH: 0.08, name: 'Тритон', parent: 'neptune', aKm: 354759, periodD: -5.877, radiusKm: 1353.4, type: 16, bump: 3, info: 'Обращается в обратную сторону; азотные гейзеры.' },
+    { id: 'triton', tex: 'triton', texAux: 'triton_mask', texH: 0.08, name: 'Тритон', parent: 'neptune', aKm: 354759, periodD: -5.877, radiusKm: 1353.4, type: 16, bump: 3, info: 'Обращается в обратную сторону; азотные гейзеры.' },
     { id: 'titania', name: 'Титания', parent: 'uranus', aKm: 435910, periodD: 8.706, radiusKm: 788.4, type: 0, col1: [0.45, 0.43, 0.42], col2: [0.62, 0.6, 0.58], bump: 6, info: 'Крупнейший спутник Урана.' },
   ];
 

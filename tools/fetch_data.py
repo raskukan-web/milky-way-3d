@@ -510,6 +510,56 @@ def fill_unmapped(im):
     return Image.composite(blur, res, m)
 
 
+# тела, у которых мозаики снимков неполные (Voyager/Galileo/New Horizons): для них строится маска неотснятых
+# районов, где шейдер достраивает поверхность процедурно в палитре снятой стороны. Способ поиска — свой для карты:
+#   число  — «гладкость»: нет деталей средних масштабов (порог — доля 75-го перцентиля энергии деталей);
+#   bright — гладкая и светлая заливка (карты JPL Каллисто: неотснятое закрашено светло-серым);
+#   black  — неотснятое было чёрным в исходнике (Плутон, New Horizons) — маска точная.
+MOSAICS = {'europa': 0.5, 'ganymede': 0.6, 'callisto': 'bright', 'triton': 0.35, 'pluto': 'black'}
+
+
+def mosaic_mask(im, mode, black=None):
+    """Маска неотснятых районов (1 — нет данных) и палитра снятой стороны: тёмные и светлые тона (sRGB 0…1)."""
+    import numpy as np
+    from PIL import ImageFilter
+    W, H = 1024, 512
+    small = im.convert('RGB').resize((W, H), Image.LANCZOS)
+    g = small.convert('L')
+    lat = (0.5 - (np.arange(H) + 0.5) / H) * np.pi
+    coslat = np.maximum(np.cos(lat), 0.3)[:, None]   # у полюсов карта растянута — деталей меньше естественно
+    if mode == 'black':
+        m = np.asarray(black.convert('L').resize((W, H), Image.BILINEAR)).astype(np.float32) / 255
+    else:
+        b1 = np.asarray(g.filter(ImageFilter.GaussianBlur(1.5))).astype(np.float32)
+        b2 = np.asarray(g.filter(ImageFilter.GaussianBlur(5))).astype(np.float32)
+        en = np.asarray(Image.fromarray(np.clip(np.abs(b1 - b2) * 6, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(10))).astype(np.float32) / 6
+        k = 1.2 if mode == 'bright' else float(mode)
+        thr = np.percentile(en, 75) * k * coslat
+        m = np.clip((thr - en) / np.maximum(thr * 0.6, 1e-3), 0, 1)
+        if mode == 'bright':
+            big = np.asarray(g.filter(ImageFilter.GaussianBlur(14))).astype(np.float32)
+            p50, p85 = np.percentile(big, [50, 85])
+            bright = np.clip((big - p50) / max(p85 - p50, 1e-3), 0, 1)
+            sm = m
+            m = np.clip((np.clip(0.55 * sm + 0.75 * bright - 0.25, 0, 1) - 0.15) / 0.5, 0, 1)
+            # крупные гладкие области (размытые полосы между снимками) — даже если они не светлые
+            smb = np.asarray(Image.fromarray((sm * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(18))).astype(np.float32) / 255
+            m = np.maximum(m, np.clip((smb - 0.42) / 0.25, 0, 1))
+    mi = Image.fromarray((m * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(5))
+    mm = np.asarray(mi).astype(np.float32) / 255
+    rgb = np.asarray(small).astype(np.float32)
+    lum = np.asarray(g).astype(np.float32)
+    good = mm < 0.15
+    pal = None
+    if good.sum() > 1000:
+        L = lum[good]; sel = rgb[good]
+        q = np.percentile(L, [8, 28, 72, 92])
+        dark = sel[(L >= q[0]) & (L <= q[1])].mean(axis=0) / 255
+        bright = sel[(L >= q[2]) & (L <= q[3])].mean(axis=0) / 255
+        pal = [[round(float(x), 3) for x in dark], [round(float(x), 3) for x in bright]]
+    return mi, float(mm.mean()), pal
+
+
 def write_tex_js(tid, data, mime, w, h, credit, extra=None):
     out_dir = os.path.join(DATA, 'tex')
     os.makedirs(out_dir, exist_ok=True)
@@ -569,7 +619,11 @@ def fetch_textures(only_ids=None):
                 continue
             else:
                 im, _ = open_first(urls)
+                black = None
                 if proc == 'pluto':
+                    import numpy as np
+                    black = Image.fromarray(((np.asarray(im.convert('RGB')).max(axis=2) < 10) * 255).astype(np.uint8))
+                    black = Image.fromarray(np.roll(np.asarray(black), black.width // 2, axis=1))
                     im = fill_unmapped(im)
                     # карта New Horizons — в долготах 0…360° (центр 180°, «сердце» Томбо в середине);
                     # у нас долгота 0° в центре карты → сдвиг на половину ширины
@@ -580,6 +634,14 @@ def fetch_textures(only_ids=None):
                 im = im.resize((W, W // 2), Image.LANCZOS)
             elif im.height * 2 != im.width:
                 im = im.resize((im.width, im.width // 2), Image.LANCZOS)
+            if tid in MOSAICS:
+                mi, cover, pal = mosaic_mask(im, MOSAICS[tid], black if proc == 'pluto' else None)
+                extra = dict(extra or {}, fill=pal, unmapped=round(cover, 3))
+                if cover > 0.01:
+                    mi = mi.resize((max(256, im.width // 4), max(128, im.width // 8)), Image.LANCZOS)
+                    mb = io.BytesIO(); mi.convert('RGB').save(mb, 'JPEG', quality=85)
+                    nm = write_tex_js(tid + '_mask', mb.getvalue(), 'image/jpeg', mi.width, mi.height, credit + ' — маска неотснятых районов')
+                    print(f'    -> js/data/tex/{tid}_mask.js (неотснято {cover * 100:.0f} %, {nm / 1e3:.0f} КБ)')
             buf = io.BytesIO()
             im.save(buf, 'JPEG', quality=92 if proc in ('linear', 'earth_aux') else 88, optimize=True, progressive=True)
             n = write_tex_js(tid, buf.getvalue(), 'image/jpeg', im.width, im.height, credit, extra)
