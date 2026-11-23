@@ -257,23 +257,29 @@
       for (let s = 0; s < steps; s++) {
         const ang = g() * 0.12; const ca = Math.cos(ang), sa = Math.sin(ang);
         const ndx = dx * ca - dy * sa, ndy = dx * sa + dy * ca; dx = ndx; dy = ndy;
-        x += dx * 55; y += dy * 55;
+        x += dx * 85; y += dy * 85;
         const cf = coreFade(x, y);
         const oo = o * (0.6 + 0.6 * rnd()) * cf;
-        if (oo > 0.004) push(dust, x + g() * 18, y + g() * 18, z0 + g() * 25, oo * 0.42, oo * 0.72, oo * 1.3, w0 * (0.7 + 0.6 * rnd()));
-        if (oo > 0.004 && rnd() < 0.5) push(dust, x + dx * 27, y + dy * 27, z0 + g() * 25, oo * 0.42, oo * 0.72, oo * 1.3, w0 * (0.7 + 0.6 * rnd()));
+        if (oo > 0.004) {
+          // тёмно-бурый тон: синий поглощается сильнее всего, красный — слабее
+          push(dust, x + g() * 25, y + g() * 25, z0 + g() * 25, oo * 0.36, oo * 0.68, oo * 1.4, w0 * (0.7 + 0.6 * rnd()));
+          push(dust, x + dx * 42, y + dy * 42, z0 + g() * 25, oo * 0.36, oo * 0.68, oo * 1.4, w0 * (0.7 + 0.6 * rnd()));
+          // второй, более узкий жгут рядом — полоса выглядит волокнистой, а не ровной
+          const px = -dy, py = dx, so = w0 * (0.5 + 0.4 * rnd()) * (rnd() < 0.5 ? 1 : -1);
+          if (rnd() < 0.4) push(dust, x + px * so, y + py * so, z0 + g() * 25, oo * 0.25, oo * 0.48, oo * 1.0, w0 * (0.4 + 0.4 * rnd()));
+        }
         // ветвление
         if (rnd() < 0.025 && steps - s > 8) lane(x, y, z0, dx * 0.7 - dy * 0.7 * (rnd() < 0.5 ? 1 : -1), dy * 0.7 + dx * 0.7, (steps - s) >> 1, o * 0.7, w0 * 0.8);
       }
     };
-    for (let l = 0, nl = N(2600); l < nl; l++) {
+    for (let l = 0, nl = N(2200); l < nl; l++) {
       const k = pickArm();
       const { r } = armSample(k);
       const off = -560 - Math.abs(g()) * 300;
       const [x0, y0] = onArm(k, r, off);
       const [x1, y1] = onArm(k, r + 120, off);
       const len = Math.hypot(x1 - x0, y1 - y0) || 1;
-      lane(x0, y0, g() * 50, (x1 - x0) / len, (y1 - y0) / len, 18 + ((rnd() * 40) | 0), 0.35 + 0.45 * rnd(), 120 + 110 * rnd());
+      lane(x0, y0, g() * 50, (x1 - x0) / len, (y1 - y0) / len, 20 + ((rnd() * 45) | 0), 0.2 + 0.22 * rnd(), 170 + 130 * rnd());
     }
     // 5b. Пылевые «перья»: тонкие тёмные полосы, отходящие от пылевой кромки наружу поперёк рукава
     for (const sp of spurs) {
@@ -281,8 +287,8 @@
       for (let s = 0; s < steps; s++) {
         const f = s / steps;
         const [x, y] = spurPt(sp, f);
-        const o = (sp.feather ? 0.34 : 0.22) * (1 - f) * (0.6 + 0.6 * rnd()) * coreFade(x, y);
-        if (o > 0.004) push(dust, x + g() * 25, y + g() * 25, g() * 30, o * 0.42, o * 0.72, o * 1.3, 110 + 90 * rnd());
+        const o = (sp.feather ? 0.32 : 0.2) * (1 - f) * (0.6 + 0.6 * rnd()) * coreFade(x, y);
+        if (o > 0.004) push(dust, x + g() * 30, y + g() * 30, g() * 30, o * 0.36, o * 0.68, o * 1.4, 140 + 110 * rnd());
       }
     }
     // реальные пылевые комплексы вокруг Солнца: [l°, b°, расстояние св. лет, протяжённость по l°, по b°, число сгустков]
@@ -321,7 +327,7 @@
         if (f < 0.05) continue;
         const x0 = u0 * cb - v0 * sb, y0 = u0 * sb + v0 * cb;
         const dir = rnd() < 0.5 ? 1 : -1;
-        lane(x0, y0, g() * 40, cb * dir, sb * dir, 20 + ((rnd() * 30) | 0), (0.4 + 0.4 * rnd()) * f, 140 + 120 * rnd());
+        lane(x0, y0, g() * 40, cb * dir, sb * dir, 20 + ((rnd() * 30) | 0), (0.3 + 0.3 * rnd()) * f, 180 + 140 * rnd());
       }
     }
     // 6. Подложка светящегося газа — заметно слабее и мельче (без мутной пелены): сапфировый газ гребней

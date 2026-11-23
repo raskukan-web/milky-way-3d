@@ -662,6 +662,11 @@
       }
       if (!this.labels) return;
       const sunD = v3.len(cam.pos);
+      // Фильтр подписей по масштабу: объекты внутри диска Галактики (звёзды, туманности, скопления, пульсары,
+      // остатки сверхновых) подписываются, только пока камера ближе ~20 000 св. лет к ним; от 12 000 подписи
+      // плавно гаснут. Издали остаются рукава, Солнце, центр Галактики, галактики и внегалактические ориентиры.
+      const GAL_IN = new Set(['nebula', 'snr', 'planetary', 'cluster', 'globular', 'pulsar', 'xray']);
+      const galFade = (d) => 1 - U.smoothstep(12000, 20000, d);
       // тела систем
       for (const sys of sc.systems) {
         const dSys = v3.dist(cam.pos, sys.star.pos);
@@ -671,7 +676,7 @@
             if (b.kind === 'moon') { const dp = v3.dist(cam.pos, b.parentBody.pos); if (dp > b.parentBody.radius * 400) continue; }
             label(b.name, b.pos, b.kind === 'moon' ? '#a9b4c8' : '#cfe0ff', { size: b.kind === 'moon' ? 11 : 12 });
           }
-        } else if (!sys.isSolar) label(sys.star.name, sys.star.pos, '#ffe9a8');
+        } else if (!sys.isSolar && galFade(dSys) > 0.02) label(sys.star.name, sys.star.pos, '#ffe9a8', { alpha: galFade(dSys) });
       }
       if (sunD >= 3000 * MW.C.AU_LY) label('☉ Солнце', [0, 0, 0], '#ffe27a', { bold: true });
       if (sunD < 20000 * MW.C.AU_LY) for (const pr of sc.probes) label(pr.name, pr.pos, MW.color.hex(pr.color), { size: 12, bold: true });
@@ -681,14 +686,16 @@
         const dd = v3.dist(cam.pos, s.pos);
         const m = s.absMag + 5 * Math.log10(Math.max(dd, 1e-9) / 32.6156);
         if (m > lim && dd > 30) continue;
-        label(s.name, s.pos, '#d9e4ff', { size: 11, alpha: U.clamp(1.2 - (m - lim + 2) * 0.25, 0.45, 1) });
+        const gf = galFade(dd); if (gf <= 0.02) continue;
+        label(s.name, s.pos, '#d9e4ff', { size: 11, alpha: U.clamp(1.2 - (m - lim + 2) * 0.25, 0.45, 1) * gf });
       }
       if (!this._namedHyg) this._namedHyg = sc.catalog.hygStars.filter((s) => s.proper);
       for (const s of this._namedHyg) {
         const dd = v3.dist(cam.pos, s.pos);
         const m = s.absMag + 5 * Math.log10(Math.max(dd, 1e-9) / 32.6156);
         if (m > lim - 0.3 && dd > 20) continue;
-        label(s.name, s.pos, '#c3cfee', { size: 10.5, alpha: U.clamp(1.1 - (m - lim + 2) * 0.25, 0.4, 0.9) });
+        const gf = galFade(dd); if (gf <= 0.02) continue;
+        label(s.name, s.pos, '#c3cfee', { size: 10.5, alpha: U.clamp(1.1 - (m - lim + 2) * 0.25, 0.4, 0.9) * gf });
       }
       // созвездия
       if (r.s.constellations && sunD < 1500) {
@@ -701,7 +708,7 @@
       for (const c of sc.catalog.binaries) {
         const dd = v3.dist(cam.pos, c.pos);
         const m = c.absMag + 5 * Math.log10(Math.max(dd, 1e-9) / 32.6156);
-        if (dd < 3 || (m < lim && v3.dist(c.pos, c.primary.pos) / dd > 0.004)) label(c.name, c.pos, '#d9e4ff', { size: 11 });
+        if (galFade(dd) > 0.02 && (dd < 3 || (m < lim && v3.dist(c.pos, c.primary.pos) / dd > 0.004))) label(c.name, c.pos, '#d9e4ff', { size: 11, alpha: galFade(dd) });
       }
       for (const o of sc.catalog.dsos) {
         const dO = v3.dist(cam.pos, o.pos);
@@ -715,7 +722,10 @@
         if (!landmark && o.ext && !o.messier && o.vis !== 'pulsar' && !((o.mag ?? 99) < 6.5 || dO < o.radius * 60)) continue;
         if (o.ext && o.messier && o.vis === 'galaxy' && dO > 1e8) continue;
         if (landmark && dO > Math.max(o.dist * 40, 6e10)) continue;
-        label(o.name, o.pos, { nebula: '#ff9ab0', snr: '#ffb27a', planetary: '#7af0d0', globular: '#ffe4a8', cluster: '#a8c8ff', galaxy: '#d8c8ff', pulsar: '#8fd4ff', quasar: '#9fc0ff', galcluster: '#ffd9a0', xray: '#b6c8ff' }[o.vis] || '#ddd', { size: 11, bold: landmark });
+        // объекты внутри диска (в т.ч. ориентиры вроде Кассиопеи A, Лебедя X-1) — только вблизи
+        const gf = GAL_IN.has(o.vis) ? galFade(dO) : 1;
+        if (gf <= 0.02) continue;
+        label(o.name, o.pos, { nebula: '#ff9ab0', snr: '#ffb27a', planetary: '#7af0d0', globular: '#ffe4a8', cluster: '#a8c8ff', galaxy: '#d8c8ff', pulsar: '#8fd4ff', quasar: '#9fc0ff', galcluster: '#ffd9a0', xray: '#b6c8ff' }[o.vis] || '#ddd', { size: 11, bold: landmark, alpha: gf });
       }
       label('Стрелец A*', sc.bh.pos, '#ffb060', { bold: v3.dist(cam.pos, sc.bh.pos) < 2000 });
       if (sunD > 6000) for (const a of MW.galaxy.armLabels()) label(a.name, a.pos, 'rgba(170,200,255,0.8)', { size: 12, center: true });
