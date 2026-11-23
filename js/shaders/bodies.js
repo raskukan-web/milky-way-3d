@@ -470,65 +470,75 @@ vec2 swirlField(vec2 ll, float k, float amp){
   }
   return off / sc;
 }
-// Атмосфера экзо-гиганта/нептуна (уровень снимков «Юноны»): многоуровневое искажение координат,
-// сотни вихрей на стыках поясов, фестоны, цепочки белых «жемчужин», крупные антициклоны.
+// Атмосфера экзо-гиганта/субнептуна — только газ и облака, никаких ячеистых (Ворли) структур, которые на
+// терминаторе читались бы как кратеры. Слои: глубокая атмосфера (u_col2), верхняя облачная палуба (u_col1),
+// штормы и струи (u_col3), фотохимическая дымка (u_par.y). Геометрию задаёт уникальный вектор планеты u_rnd:
+// неравная ширина поясов, их число, плотность и сила вихрей, число антициклонов, полярные спирали.
+float gCov = 0.0;      // доля верхней облачной палубы в пикселе (для освещения «глубины» облаков)
 vec3 exoBands(vec3 n){
   float tt = u_time * 0.006;
   float lon = atan(n.y, n.x), lat = asin(clamp(n.z, -1.0, 1.0));
   float fr = u_par2.y;
+  // неравномерная ширина поясов и асимметрия полушарий — своя у каждой планеты
+  float latW = lat + 0.07 * sin(lat * 2.1 + u_rnd.x * 6.2832) + 0.045 * sin(lat * 4.7 + u_rnd.y * 6.2832) + 0.03 * (u_rnd.z - 0.5);
   // 1) крупномасштабное двухуровневое искажение (domain warping)
   vec3 a = n * vec3(2.6, 2.6, 7.0);
   vec3 q1 = vec3(fbm(a + SP + vec3(tt, 0.0, 0.0), 4), fbm(a + SP.yzx + 5.2 - vec3(tt, 0.0, 0.0), 4), 0.0);
   vec3 q2 = vec3(fbm(a * 1.7 + 2.5 * q1 + SP * 1.3, 4), fbm(a * 1.7 + 2.5 * q1 + SP.zxy + 8.1, 4), 0.0);
-  // турбулентность сильнее всего на стыках поясов
-  float edgeK = 1.0 - abs(sin(lat * fr));
-  // 2) вихри двух масштабов на стыках поясов
+  float edgeK = 1.0 - abs(sin(latW * fr));
+  // 2) вихри двух масштабов на стыках поясов: плотность и закрутка — от уникальных чисел планеты
   vec2 ll = vec2(lon, lat);
-  vec2 sw = swirlField(ll + vec2(tt * 0.3, 0.0), 34.0, 4.5) * (0.35 + 0.65 * edgeK)
-          + swirlField(ll + vec2(-tt * 0.5, 0.0) + q2.xy * 0.02, 90.0, 3.5) * (0.2 + 0.8 * edgeK);
-  float l = lat + sw.y + 0.03 * u_par.w * q2.x * (0.3 + edgeK);
+  float k1 = floor(mix(18.0, 46.0, u_rnd.z)), k2 = floor(mix(52.0, 118.0, u_rnd.w));
+  vec2 sw = swirlField(ll + vec2(tt * 0.3, 0.0), k1, mix(2.5, 5.5, u_rnd.y)) * (0.35 + 0.65 * edgeK)
+          + swirlField(ll + vec2(-tt * 0.5, 0.0) + q2.xy * 0.02, k2, mix(2.0, 4.0, u_rnd.x)) * (0.2 + 0.8 * edgeK);
+  float l = latW + sw.y + 0.03 * u_par.w * q2.x * (0.3 + edgeK);
   float lo = lon + sw.x + 0.25 * q2.y;
-  float b = 0.6 * sin(l * fr) + 0.3 * sin(l * fr * 1.9 + 1.7 + u_seed * 6.0) + 0.1 * sin(l * fr * 3.7 + 0.3);
-  gBand = smoothstep(-0.2, 0.2, b);
+  float b = 0.6 * sin(l * fr) + 0.3 * sin(l * fr * (1.6 + 0.6 * u_rnd.w) + 1.7 + u_rnd.x * 6.0) + 0.1 * sin(l * fr * 3.7 + 0.3 + u_rnd.y * 4.0);
+  gBand = smoothstep(-0.2, 0.2, b + u_par.x);
   vec3 c = mix(u_col2, u_col1, gBand);
-  // струйные течения и волокна вдоль параллелей
-  float jet = pow(1.0 - abs(sin(l * fr * 2.3 + 0.8)), 12.0);
-  c = mix(c, u_col3, 0.45 * jet);
-  float streak = fbm(vec3(lo * 3.0, l * 80.0, u_seed * 9.0), 4);
-  c *= 0.78 + 0.38 * streak;
-  // фестоны: тёмные «завитки», свисающие с границы экваториальной зоны
-  float fest = exp(-pow((abs(l) - 0.13) / 0.035, 2.0)) * pow(1.0 - abs(sin(lo * 9.0 + 3.0 * q1.x)), 6.0);
-  c = mix(c, u_col2 * 0.45, fest * 0.75);
-  // белые конвективные штормы, разорванные вихрями
-  vec2 wv = worley(vec3(lo * 6.0, l * 18.0, u_seed * 3.0 + tt * 3.0));
-  float storm = smoothstep(0.32, 0.05, wv.x) * smoothstep(0.35, 0.9, edgeK) * smoothstep(0.0, 0.4, q2.x + 0.25);
-  c = mix(c, vec3(0.97, 0.98, 1.0), clamp(storm, 0.0, 1.0) * 0.8);
-  // «нить жемчужин»: цепочка белых овалов на одной широте
-  float latP = -0.55 + 0.3 * fract(u_seed * 5.3);
-  float pc = lo * 7.0 / 1.0;
-  float pd = length(vec2((fract(pc) - 0.5) / 7.0 * 6.2831853 * cos(latP) * 1.8, (l - latP) * 3.0));
-  float pearl = smoothstep(0.09, 0.03, pd) * step(0.35, fract(sin(floor(pc) * 12.9898 + u_seed * 78.2) * 43758.5));
-  c = mix(c, vec3(0.98), pearl * 0.9);
-  c = mix(c, u_col2 * 0.5, smoothstep(0.12, 0.09, pd) * (1.0 - smoothstep(0.09, 0.05, pd)) * step(0.35, fract(sin(floor(pc) * 12.9898 + u_seed * 78.2) * 43758.5)) * 0.5);
-  // крупные антициклоны с яркими облаками-спутниками
-  for (int i = 0; i < 2 + u_zero; i++){
+  // струйные течения и тонкие волокна вдоль параллелей (мягкие, без замкнутых «контуров»)
+  float jet = pow(1.0 - abs(sin(l * fr * 2.3 + 0.8 + u_rnd.z * 3.0)), 12.0);
+  c = mix(c, u_col3, 0.4 * jet);
+  float streak = fbm(vec3(lo * 3.0, l * mix(35.0, 60.0, u_rnd.w), u_rnd.x * 9.0), 3);
+  c *= 0.86 + 0.24 * streak;
+  // фестоны у экваториальной зоны
+  float fest = exp(-pow((abs(l) - 0.13) / 0.035, 2.0)) * pow(1.0 - abs(sin(lo * (7.0 + 4.0 * u_rnd.y) + 3.0 * q1.x)), 6.0);
+  c = mix(c, u_col2 * 0.5, fest * 0.6);
+  // конвективные штормы верхней палубы: рваные облачные массы из искажённого шума (не ячейки)
+  float storm = smoothstep(0.38, 0.72, fbm(vec3(lo * 3.5, l * 12.0, u_rnd.z * 7.0) + vec3(q2.xy * 1.6, 0.0), 4))
+              * smoothstep(0.35, 0.9, edgeK) * step(0.25, u_rnd.w);
+  c = mix(c, u_col3 * 1.05, storm * 0.7);
+  // «нить жемчужин» — есть не у всех
+  if (u_rnd.z > 0.45){
+    float latP = -0.6 + 0.35 * u_rnd.x;
+    float pc = lo * floor(5.0 + 5.0 * u_rnd.y);
+    float pd = length(vec2((fract(pc) - 0.5) * 0.9 * cos(latP), (l - latP) * 3.0));
+    float on = step(0.35, fract(sin(floor(pc) * 12.9898 + u_rnd.w * 78.2) * 43758.5));
+    c = mix(c, u_col3, smoothstep(0.09, 0.03, pd) * on * 0.85);
+    storm = max(storm, smoothstep(0.09, 0.03, pd) * on);
+  }
+  // крупные антициклоны: 0–3 штуки, размер и широта свои; мягкий воротник вместо резкого кольца
+  int nOv = int(floor(u_rnd.y * 3.99));
+  for (int i = 0; i < 3 + u_zero; i++){
+    if (i >= nOv) break;
     float fi = float(i);
-    float lat0 = (fract(u_seed * 7.31 + fi * 0.37) - 0.5) * 1.3;
-    float lon0 = fract(u_seed * 3.7 + fi * 0.51) * 6.2831853 - 3.14159 + u_time * 0.004 * (1.0 + fi);
+    float lat0 = (fract(u_rnd.x * 7.31 + fi * 0.37) - 0.5) * 1.3;
+    float lon0 = fract(u_rnd.w * 3.7 + fi * 0.51) * 6.2831853 - 3.14159 + u_time * 0.004 * (1.0 + fi);
     float dlon = mod(lon - lon0 + 3.14159, 6.2831853) - 3.14159;
-    vec2 e2 = vec2(dlon * cos(lat0) / (0.17 - fi * 0.05), (lat - lat0) / (0.085 - fi * 0.025));
+    float sz = mix(0.09, 0.2, fract(u_rnd.z * 3.1 + fi * 0.29));
+    vec2 e2 = vec2(dlon * cos(lat0) / sz, (lat - lat0) / (sz * 0.5));
     float e = length(e2);
     float ang = atan(e2.y, e2.x);
-    float swirl = 0.5 + 0.5 * sin(e * 11.0 - ang * 2.0 + 3.0 * q2.x + u_time * 0.05);
-    c = mix(c, mix(u_col2 * 0.3, u_col1 * 0.9, swirl * 0.6), smoothstep(1.0, 0.45, e) * 0.9);
-    c = mix(c, vec3(0.95, 0.97, 1.0), smoothstep(0.3, 0.0, abs(e - 1.2)) * 0.6 * smoothstep(-0.2, 0.9, sin(ang + 1.2 + q1.x * 2.0)));
+    float swirl = 0.5 + 0.5 * sin(e * 9.0 - ang * 2.0 + 3.0 * q2.x + u_time * 0.05);
+    c = mix(c, mix(u_col2 * 0.45, u_col1 * 0.95, swirl * 0.6 + 0.2), smoothstep(1.0, 0.45, e) * 0.85);
+    c = mix(c, u_col3, smoothstep(1.6, 1.15, e) * smoothstep(0.85, 1.1, e) * 0.25);
   }
-  // полярная зона: мелкие циклоны вместо полос (как у полюсов Юпитера)
-  float pol = smoothstep(0.62, 0.85, abs(n.z));
-  vec2 wp = worley(n * 22.0 + SP);
-  c = mix(c, mix(u_col3 * 0.7, u_col2 * 0.6, smoothstep(0.1, 0.5, wp.x)), pol * 0.7);
-  // вращение: быстрое — много тонких контрастных поясов; медленное (захват) — гигантские спиральные
-  // циклоны и шевронные облачные волны
+  // полярная зона: спиральные полосы полярного вихря (как полярные циклоны Юпитера/Сатурна), без ячеек
+  float pol = smoothstep(0.6, 0.88, abs(n.z));
+  float colat = acos(clamp(abs(n.z), 0.0, 1.0));
+  float sp = sin(lon * floor(3.0 + 4.0 * u_rnd.x) + log(max(colat, 0.02)) * mix(4.0, 9.0, u_rnd.y) + 3.0 * q1.x);
+  c = mix(c, mix(u_col2 * 0.7, u_col3 * 0.8, 0.5 + 0.5 * sp), pol * 0.6);
+  // вращение: быстрое — много тонких поясов; медленное (захват) — гигантские спиральные циклоны и шевроны
   float slow = u_par2.z;
   c *= 0.9 + 0.2 * (1.0 - slow) * (0.5 + 0.5 * sin(l * fr * 3.3 + 2.0 * q2.x));
   if (slow > 0.01){
@@ -543,14 +553,18 @@ vec3 exoBands(vec3 n){
       float arms = 0.5 + 0.5 * sin(ang * 2.0 - log(max(e, 0.02)) * 5.0 * spin + 2.0 * q1.x - u_time * 0.03);
       float cyc = smoothstep(1.0, 0.15, e);
       c = mix(c, mix(u_col2 * 0.55, u_col1 * 1.05, arms), cyc * 0.75 * slow);
-      c = mix(c, vec3(0.97), smoothstep(0.1, 0.0, e) * 0.5 * slow);
+      c = mix(c, u_col3, smoothstep(0.1, 0.0, e) * 0.5 * slow);
     }
     float chev = sin(l * fr * 1.3 + 7.0 * abs(fract(lo * 3.0 / 6.2831853) - 0.5) + q1.y * 2.0);
     c = mix(c, u_col3, smoothstep(0.55, 0.95, chev) * 0.3 * slow);
   }
+  // верхняя облачная палуба (для освещения): светлые зоны и штормы лежат выше тёмных поясов
+  gCov = clamp(gBand * 0.75 + storm * 0.8 + jet * 0.2, 0.0, 1.0);
+  // фотохимическая дымка (u_par.y): приглушает контраст, цвет — смесь светлых тонов
+  float hz = clamp(u_par.y, 0.0, 1.0);
+  c = mix(c, u_col1 * 0.65 + u_col3 * 0.35, hz * 0.45);
   float lu = dot(c, vec3(0.3, 0.59, 0.11));
-  // насыщенные, контрастные цвета (без «серости»)
-  c = max(mix(vec3(lu), c, 1.6), 0.0);
+  c = max(mix(vec3(lu), c, 1.6 - 0.5 * hz), 0.0);
   return pow(c, vec3(1.12)) * 1.06;
 }
 vec3 albedoP(vec3 n, float h, out float spec, out vec3 emis);
@@ -960,7 +974,11 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
   // и микротени к звезде. albedo() в цикле — встраивается один раз.
   vec3 alb = vec3(0.0); float spec = 0.0; vec3 emis = vec3(0.0);
   // рельеф облаков: экзо-гиганты и газовые гиганты Солнечной системы с реальной картой
-  bool cRel = (u_exo.x > 0.5 && u_exo.x < 2.5) || (u_texP.x > 0.5 && (u_type == 1 || u_type == 4 || u_type == 5 || u_type == 6 || u_type == 7));
+  // Рельеф облаков по перепадам яркости — только для реальных карт Солнечной системы. У газовых оболочек
+  // экзопланет он превращал каждую границу светлого и тёмного в «хребет» с тенью — на терминаторе это
+  // читалось как кратеры и пузыри. Там глубина облаков передаётся освещением слоёв (см. gasExo ниже).
+  bool cRel = u_texP.x > 0.5 && (u_type == 1 || u_type == 4 || u_type == 5 || u_type == 6 || u_type == 7);
+  bool gasExo = u_exo.x > 0.5 && u_exo.x < 2.5;
   float cloudSh = 1.0;
   {
     vec3 t1 = normalize(cross(n, abs(n.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
@@ -995,13 +1013,19 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
     diff = mix(diff, ls * 1.6, 0.5);
   }
   diff *= smoothstep(-0.015, 0.035, ndlS);
-  // у экзо-гигантов глубокое потемнение к терминатору; тени облачных гряд и рельефа
-  if (cRel){
+  // у газовых гигантов глубокое потемнение к терминатору
+  if (cRel || gasExo){
     // матовые облака: смесь Ламберта и Ломмеля–Зеелигера — освещённость ровнее по диску, без яркого «блика»
     // в центре; у терминатора — по-прежнему глубокое потемнение
     float ls = 2.0 * diff / (diff + ndv + 0.05);
     diff = mix(diff, ls * smoothstep(0.0, 0.25, diff), 0.5) * 0.78;
     diff = pow(max(diff, 0.0), 1.3);
+  }
+  if (gasExo){
+    // два слоя облаков: верхняя палуба освещена почти как обычно, глубокие пояса к терминатору гаснут быстрее
+    // (свет проходит больший путь сквозь дымку) — объём без ложного «рельефа»
+    float deep = exp(-0.45 * (1.0 / max(ndlS, 0.03) - 1.0));
+    diff *= mix(mix(0.3, 1.0, deep), 1.06, gCov);
   }
   diff *= cloudSh * gShadow;
   float rs = 1.0;
@@ -1036,10 +1060,11 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
   // полярное сияние на магнитных полюсах и молнии на ночной стороне газовых гигантов
   if (u_type == 4 || u_type == 5 || u_type == 14 || u_type == 17){
     float colat = acos(clamp(abs(n.z), 0.0, 1.0));
-    float ring = exp(-pow((colat - 0.26) / 0.045, 2.0));
-    float curtain = 0.55 + 0.45 * sin(atan(n.y, n.x) * 17.0 + u_time * 0.35 + 4.0 * fbm(n * 5.0 + SP + vec3(u_time * 0.03), 2));
-    vec3 aurC = mix(vec3(0.25, 1.0, 0.55), vec3(0.85, 0.35, 1.0), smoothstep(0.2, 0.32, colat));
-    lit += aurC * ring * curtain * (0.05 + 0.5 * night) * (0.6 + 0.4 * pow(1.0 - ndv, 1.5)) * 0.6;
+    // авроральный овал: тонкий (~0,015 рад), ближе к полюсу (~10° от него), неяркий
+    float ring = exp(-pow((colat - 0.17 - 0.01 * sin(atan(n.y, n.x) * 2.0 + u_rnd.x * 6.0)) / 0.015, 2.0));
+    float curtain = 0.55 + 0.45 * sin(atan(n.y, n.x) * 29.0 + u_time * 0.35 + 4.0 * fbm(n * 7.0 + SP + vec3(u_time * 0.03), 2));
+    vec3 aurC = mix(vec3(0.3, 1.0, 0.6), vec3(0.8, 0.4, 1.0), smoothstep(0.15, 0.2, colat));
+    lit += aurC * ring * curtain * (0.02 + 0.3 * night) * (0.6 + 0.4 * pow(1.0 - ndv, 1.5)) * 0.35;
     vec3 g = n * 18.0, cc = floor(g);
     // молнии — редкие и тусклые (в ~20 раз реже прежнего): ночная сторона спокойная и тёмная
     float ph = u_time * 0.6 + hash13(cc) * 7.0;
