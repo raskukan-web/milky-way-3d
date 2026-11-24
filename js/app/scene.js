@@ -255,6 +255,11 @@
       if (o.kind === 'dso') {
         // активное ядро: первый «Лететь» — к галактике и джетам, повторный (камера уже рядом) — в самое ядро
         if (o.bhChild && this.lastCam && v3.dist(this.lastCam, o.pos) < o.radius * 4) return this.makeTarget(o.bhChild);
+        // сверхскопление: дистанция по реальному диаметру (вся структура в кадре), взгляд — под углом к её плоскости
+        if (o.supercluster) {
+          const vd = o.viewNrm ? v3.norm(v3.add(v3.scale(o.viewNrm, 0.8), v3.scale(o.viewAx || v3.perp(o.viewNrm), 0.45))) : undefined;
+          return { obj: o, name: o.name, getPos: () => o.pos, arrive: o.radius * 2.7, viewDir: vd };
+        }
         const k = o.vis === 'galaxy' ? 2.2 : o.vis === 'globular' ? 2.6 : o.vis === 'cluster' ? 3.2 : 2.4;
         return { obj: o, name: o.name, getPos: () => o.pos, arrive: o.radius * k };
       }

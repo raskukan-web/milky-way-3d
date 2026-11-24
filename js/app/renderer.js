@@ -50,7 +50,7 @@
   class Renderer {
     constructor(glc, scene) {
       this.glc = glc; this.gl = glc.gl; this.scene = scene;
-      this.s = { renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 8.5, quality: MW.Q.q, lens: MW.Q.post, autoExposure: true, artistic: true, panorama: true, panoGain: 1.0 };
+      this.s = { flows: true, renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 8.5, quality: MW.Q.q, lens: MW.Q.post, autoExposure: true, artistic: true, panorama: true, panoGain: 1.0 };
       this.width = 1; this.height = 1;
       this.compile();
       this.buildStatic();
@@ -181,6 +181,7 @@
         const rot = MW.m3.toGL(MW.m3.transpose(R));
         return Object.assign({ obj: o, rot, seed: (MW.rng.hashStr(o.id) % 1000) / 1000, rb: 1.0, par: [0, 0, 0, 0] }, p);
       });
+      this.buildSuperclusters();
       this.buildDeepSky();
       // крупномасштабная структура Вселенной (синтетическая) и квазары
       const web = MW.cosmos.buildCosmicWeb(MW.Q.web);
@@ -215,11 +216,46 @@
         + this.webBuf.count + this.qsoBuf.count;
     }
 
+    /* Сверхскопления: 3D-рои «мини-галактик» в узлах, филаменты, поле; межсверхскопленческие мосты; линии тока
+       Ланиакеи. Бюджет частиц — по пресету качества (на слабых устройствах меньше галактик и линий). */
+    buildSuperclusters() {
+      const SC = MW.superclusters;
+      this.superList = [];
+      if (!SC) return;
+      const total = MW.QUALITY === 'ultra' ? 260000 : MW.QUALITY === 'medium' ? 90000 : 32000;
+      const wsum = SC.list.reduce((t, o) => t + Math.sqrt(o.sc.d), 0);
+      for (const o of SC.list) {
+        const n = Math.max(300, Math.round(total * Math.sqrt(o.sc.d) / wsum * (o.id === 'laniakea' ? 0.4 : 1)));
+        const m = SC.buildOne(o, n);
+        this.superList.push({ obj: o, buf: this.glc.instanced(m.data, [[1, 3], [2, 4]]), nodes: m.nodes, ax: m.ax, nrm: m.nrm });
+        o.viewNrm = m.nrm; o.viewAx = m.ax;
+      }
+      this.superBridges = this.glc.instanced(SC.buildBridges(Math.round(total * 0.12)), [[1, 3], [2, 4]]);
+      const lan = this.superList.find((s) => s.obj.id === 'laniakea');
+      this.laniFlows = SC.buildFlows(MW.QUALITY === 'ultra' ? 170 : MW.QUALITY === 'medium' ? 90 : 40, lan && lan.nodes);
+    }
+    drawSuperclusters(cam, sunD) {
+      if (!this.superList || !this.superList.length) return;
+      const U = MW.util;
+      // синтетические рои показываются, когда камера ушла из Местной группы (вблизи Солнца — реальные галактики)
+      const out = U.smoothstep(6e6, 4e7, sunD);
+      if (out < 0.01) return;
+      for (const s of this.superList) {
+        const o = s.obj, D = v3.dist(cam.pos, o.pos);
+        const far = 1 - U.smoothstep(o.radius * 40, o.radius * 160, D);
+        const k = out * far;
+        if (k < 0.01) continue;
+        this.drawParticles(s.buf, o.pos, null, 0.5 * k, 3.0, false, false);
+      }
+      const kb = out * (1 - U.smoothstep(2e9, 6e9, sunD));
+      if (kb > 0.01) this.drawParticles(this.superBridges, [0, 0, 0], null, 0.45 * kb, 3.0, false, false);
+    }
+
     /* Глубокий космос: все объекты каталогов без детальной модели — одним инстансным буфером.
        Класс объекта выбирает модель во фрагментном шейдере (см. js/shaders/deepsky.js). */
     buildDeepSky() {
       const cat = MW.catalog;
-      const dedicated = new Set([...this.extGal.map((g) => g.obj), ...this.clusters.map((c) => c.obj), ...this.nebulae.map((n) => n.obj)]);
+      const dedicated = new Set([...this.extGal.map((g) => g.obj), ...this.clusters.map((c) => c.obj), ...this.nebulae.map((n) => n.obj), ...(this.superList || []).map((s) => s.obj)]);
       const COL = { 0: [0.9, 0.92, 1.0], 1: [1.0, 0.86, 0.68], 2: [0.72, 0.84, 1.0], 3: [0.45, 1.0, 0.9], 4: [1.0, 0.6, 0.5], 5: [1.0, 0.45, 0.55], 6: [0.55, 0.7, 1.0],
         7: [0.85, 0.9, 1.0], 8: [1.0, 0.9, 0.72], 11: [0.8, 0.86, 1.0], 12: [1.0, 0.9, 0.75], 13: [0.7, 0.85, 1.0], 14: [0.95, 0.9, 0.85] };
       const ABS = { 0: -19.5, 1: -19.5, 2: -17, 3: -1, 4: -3, 5: -5, 6: -3, 7: -5, 8: -8, 9: 5, 10: 5, 11: -26, 12: -24, 13: -6, 14: -20 };
@@ -403,6 +439,16 @@
           const sel = pr === (this.selected && this.selected.obj);
           const col = [pr.color[0], pr.color[1], pr.color[2], a * (sel ? 1 : 0.7)];
           for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i], col);
+        }
+      }
+      if (this.s.flows && this.laniFlows) {
+        const a = 0.42 * MW.util.smoothstep(4e7, 2.5e8, sunD) * (1 - MW.util.smoothstep(4e9, 1.2e10, sunD));
+        if (a > 0.005) for (const pts of this.laniFlows) {
+          const n = pts.length;
+          for (let i = 1; i < n; i++) {
+            const t = i / (n - 1), fa = a * Math.min(1, i / 4) * (0.35 + 0.65 * t);
+            seg(pts[i - 1], pts[i], [0.45 + 0.55 * t, 0.62 + 0.2 * t, 1.0 - 0.55 * t, fa]);
+          }
         }
       }
       if (this.s.grid) {
@@ -699,7 +745,7 @@
       const webK = U.smoothstep(0, 1, Math.log(Math.max(sunD, 1) / 1.5e7) / Math.log(1.2e8 / 1.5e7));
       if (webK > 0.01) {
         // яркость растёт с расстоянием: издали видна вся сеть, а не отдельные точки
-        const gain = webK * (0.4 + 0.25 * U.smoothstep(1.2e8, 1e9, sunD) + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
+        const gain = webK * (0.22 + 0.43 * U.smoothstep(1.5e9, 4e9, sunD) + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
         const fog = [1.8e10, 8e10];
         this.drawParticles(this.webBuf, [0, 0, 0], null, 0.9 * gain, 2.0, false, false, fog);
         this.drawParticles(this.qsoBuf, [0, 0, 0], null, 1.6 * gain, 2.0, false, false, fog);
@@ -819,6 +865,7 @@
 
       // 3b. Вселенная: космическая паутина, квазары, сфера реликтового излучения, объекты каталогов по классам
       this.drawCosmos(cam, sunD, panoK);
+      this.drawSuperclusters(cam, sunD);
       this.drawDeepSky(cam, panoK);
 
       // 4. звёзды

@@ -207,6 +207,7 @@
       tog('#tGrid', () => s.grid, (v) => (s.grid = v));
       tog('#tOrbits', () => s.orbits, (v) => (s.orbits = v));
       tog('#tLens', () => s.lens !== false, (v) => (s.lens = v));
+      tog('#tFlows', () => s.flows !== false, (v) => (s.flows = v));
       // пресет качества: выбор сохраняется в localStorage; число частиц задаётся при сборке сцены — нужна перезагрузка
       const qs = $('#sQuality');
       qs.value = MW.QUALITY;
