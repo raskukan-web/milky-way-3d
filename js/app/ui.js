@@ -190,6 +190,9 @@
       $('#tFast').onclick = () => this.timeStep(1);
       $('#tNow').onclick = () => { this.scene.jd = Date.now() / 86400000 + 2440587.5; this.scene.timeScale = 1; this.scene.paused = false; };
       $('#panelToggle').onclick = () => document.body.classList.toggle('panel-hidden');
+      // узкий экран (телефон, планшет в портрете): панель по умолчанию свёрнута, раскрывается кнопкой ☰
+      if (MW.MOBILE) document.body.classList.add('mobile');
+      if (window.innerWidth < 900) document.body.classList.add('panel-hidden');
     }
     timeStep(dir) {
       const steps = [-31557600, -2592000, -86400, -3600, -60, 1, 60, 3600, 86400, 2592000, 31557600];
@@ -426,7 +429,20 @@
       let down = null;
       cv.addEventListener('contextmenu', (e) => e.preventDefault());
       cv.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); }); // без автопрокрутки браузера
+      // Сенсорное управление: один палец — поворот взгляда (как перетаскивание мышью), касание — выбор объекта,
+      // двойное касание — автопилот; два пальца — щипок: раздвинуть — полёт вперёд, свести — назад
+      // (шаг масштабируется расстоянием до ближайшего объекта, как у колеса и клавиш).
+      const touches = new Map();
+      let pinch = null;
+      const pinchDist = () => { const p = [...touches.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
+      const touchEnd = (e) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; };
+      cv.addEventListener('pointercancel', (e) => { touchEnd(e); down = null; });
       cv.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'touch') {
+          touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (touches.size === 2) { down = null; pinch = { d: pinchDist() }; try { cv.setPointerCapture(e.pointerId); } catch (err) { /* */ } return; }
+          if (touches.size > 2) return;
+        }
         if (e.button === 1) e.preventDefault();
         try { cv.setPointerCapture(e.pointerId); } catch (err) { /* синтетические события */ }
         down = { x: e.clientX, y: e.clientY, b: e.button, moved: 0, lx: e.clientX, ly: e.clientY, started: false };
@@ -434,7 +450,19 @@
       const tip = $('#tip');
       cv.addEventListener('pointerleave', () => (tip.style.display = 'none'));
       cv.addEventListener('pointermove', (e) => {
+        if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+          touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (pinch && touches.size >= 2) {
+            const d = pinchDist(), k = Math.log(Math.max(d, 1) / Math.max(pinch.d, 1));
+            pinch.d = d;
+            const cam = this.cam;
+            cam.cancelAuto();
+            cam.pos = v3.madd(cam.pos, cam.forward, Math.max(cam.dEff || 1e-9, 1e-12) * k * 2.2);
+            return;
+          }
+        }
         if (!down) {
+          if (e.pointerType === 'touch') return;      // у касаний нет «наведения» — подсказку не показываем
           // подсказка при наведении (с ограничением частоты)
           const now = performance.now();
           if (now - (this._hoverT || 0) < 90) return;
@@ -476,6 +504,7 @@
           this.lastClick = { o, t: now };
         }
         down = null;
+        if (e.pointerType === 'touch') touchEnd(e);
       });
       cv.addEventListener('wheel', (e) => {
         e.preventDefault();

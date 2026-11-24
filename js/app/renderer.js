@@ -50,7 +50,7 @@
   class Renderer {
     constructor(glc, scene) {
       this.glc = glc; this.gl = glc.gl; this.scene = scene;
-      this.s = { renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 8.5, quality: 1, artistic: true, panorama: true, panoGain: 1.0 };
+      this.s = { renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 8.5, quality: MW.MOBILE ? 0.15 : 1, artistic: true, panorama: true, panoGain: 1.0 };
       this.width = 1; this.height = 1;
       this.compile();
       this.buildStatic();
@@ -101,20 +101,21 @@
       const mw = MW.galaxy.buildMilkyWay(q);
       this.mwLum = glc.instanced(mw.lum, L); this.mwDust = glc.instanced(mw.dust, L); this.mwHalo = glc.instanced(mw.halo, L); this.mwGas = glc.instanced(mw.gas, L);
       const cat = MW.catalog, GB = MW.galaxy;
+      const qg = MW.MOBILE ? 0.06 : q;   // галактики-соседи на мобильных — ещё меньше частиц (их сотни)
       // галактики Местной группы (M31, M33, Магеллановы Облака, карлики)
       this.extGal = [];
       for (const o of cat.dsos.filter((d) => d.vis === 'galaxy' && !d.lite && d.normal)) {
         const seed = MW.rng.hashStr(o.id) % 100000;
         let d, model;
         if (o.gal === 'spiral') {
-          d = o.id === 'm31' ? GB.buildSpiral(31, 100000, 90000, q)
-            : GB.buildSpiral(seed, o.radius, o.ext ? 3000 : 70000, q, { pitch: 24, bulge: o.ext ? 0.15 : 0.05, flocculent: 0.2, sizeK: o.ext ? 1 : 0.5, dust: false });
+          d = o.id === 'm31' ? GB.buildSpiral(31, 100000, 90000, qg)
+            : GB.buildSpiral(seed, o.radius, o.ext ? 3000 : 70000, qg, { pitch: 24, bulge: o.ext ? 0.15 : 0.05, flocculent: 0.2, sizeK: o.ext ? 1 : 0.5, dust: false });
           const mz = o.normal, mx = v3.norm(v3.sub(o.major, v3.scale(mz, v3.dot(o.major, mz))));
           model = this.frameMat(mx, v3.cross(mz, mx), mz);
         } else {
-          if (o.gal === 'irr') d = GB.buildIrregular(seed, o.radius, o.id === 'lmc' ? 30000 : o.id === 'smc' ? 14000 : o.ext ? 2500 : 9000, q, o.id === 'lmc' ? 0.35 : o.id === 'smc' ? 0.12 : 0.06);
-          else if (o.gal === 'ell') d = GB.buildElliptical(seed, o.radius, o.ext ? 2500 : o.id === 'm32' ? 8000 : 12000, q, [1, 0.8, 0.7], false);
-          else d = GB.buildElliptical(seed, o.radius, o.id === 'sgrdsph' ? 9000 : 3500, q, o.id === 'sgrdsph' ? [1, 0.35, 0.3] : [1, 0.75, 0.65], true);
+          if (o.gal === 'irr') d = GB.buildIrregular(seed, o.radius, o.id === 'lmc' ? 30000 : o.id === 'smc' ? 14000 : o.ext ? 2500 : 9000, qg, o.id === 'lmc' ? 0.35 : o.id === 'smc' ? 0.12 : 0.06);
+          else if (o.gal === 'ell') d = GB.buildElliptical(seed, o.radius, o.ext ? 2500 : o.id === 'm32' ? 8000 : 12000, qg, [1, 0.8, 0.7], false);
+          else d = GB.buildElliptical(seed, o.radius, o.id === 'sgrdsph' ? 9000 : 3500, qg, o.id === 'sgrdsph' ? [1, 0.35, 0.3] : [1, 0.75, 0.65], true);
           const fr = MW.solar.bodyFrame(o.normal);
           model = this.frameMat(fr.x, fr.y, fr.z);
         }
@@ -124,7 +125,7 @@
       this.clusters = [];
       const addCl = (o, stars, glow) => this.clusters.push({ obj: o, stars: glc.instanced(stars, L), glow: glow ? glc.instanced(glow, L) : null });
       for (const o of cat.dsos.filter((d) => d.vis === 'globular' && !d.lite)) {
-        const g = GB.buildGlobular(MW.rng.hashStr(o.id) % 100000, o.radius, o.id === 'omegacen' ? 40000 : o.id === 'm13' ? 28000 : o.ext ? 1500 : 9000);
+        const g = GB.buildGlobular(MW.rng.hashStr(o.id) % 100000, o.radius, Math.round((o.id === 'omegacen' ? 40000 : o.id === 'm13' ? 28000 : o.ext ? 1500 : 9000) * (MW.MOBILE ? 0.11 : Math.max(q, 0.3))));
         addCl(o, g.stars, g.glow);
       }
       // рассеянные скопления из OpenNGC (Мессье/NGC)
@@ -182,7 +183,7 @@
       });
       this.buildDeepSky();
       // крупномасштабная структура Вселенной (синтетическая) и квазары
-      const web = MW.cosmos.buildCosmicWeb(900000);
+      const web = MW.cosmos.buildCosmicWeb(MW.MOBILE ? 40000 : 900000);
       this.webBuf = glc.instanced(web.web, L);
       this.qsoBuf = glc.instanced(web.qso, L);
       this.webInfo = web;
