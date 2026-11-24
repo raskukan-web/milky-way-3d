@@ -261,6 +261,8 @@
         else if (o.companion) items = [o.companion, ...items];
         if (o.companions && o.companions.length) items = [...o.companions, ...items];
         if (!items.length && title) { const h = document.createElement('div'); h.className = 'chipsTitle'; h.textContent = title; box.appendChild(h); return; }
+      } else if (o.kind === 'dso' && o.bhChild) {
+        items = [o.bhChild]; title = 'Центральная чёрная дыра';
       } else if (o.kind === 'planet') {
         items = o.system.bodies.filter((b) => b.parentBody === o);
         title = items.length ? (o.artisticExtras ? 'Спутники — художественная реконструкция (' : 'Спутники (') + items.length + ')' : '';
@@ -372,7 +374,13 @@
         R.push(['Направление', d.con + ' (RA ' + d.ra.toFixed(2) + 'ʰ, Dec ' + (d.dec > 0 ? '+' : '') + d.dec.toFixed(1) + '°)']);
         R.push(['Запуск', d.launchTxt], ['Пролёты', d.flybyTxt], ['Статус', d.status], ['Масса при запуске', '825 кг']);
       } else if (o.kind === 'bh') {
-        R.push(['Масса', '4.3 млн M☉'], ['Радиус Шварцшильда', '12.7 млн км'], ['От Солнца', '26 000 св. лет'], ['Созвездие', 'Стрелец']);
+        if (!o.host) R.push(['Масса', '4.3 млн M☉'], ['Радиус Шварцшильда', '12.7 млн км'], ['От Солнца', '26 000 св. лет'], ['Созвездие', 'Стрелец']);
+        else {
+          const M = o.mass, rsKm = M * 2.953;
+          R.push(['Масса', M >= 1e9 ? (M / 1e9).toFixed(M >= 1e10 ? 0 : 1) + ' млрд M☉' : M >= 1e6 ? Math.round(M / 1e6) + ' млн M☉' : M.toFixed(1) + ' M☉'],
+            ['Радиус Шварцшильда', rsKm > 1.5e8 ? Math.round(rsKm / 1.496e8) + ' а. е.' : rsKm > 1e6 ? (rsKm / 1e6).toFixed(1) + ' млн км' : Math.round(rsKm) + ' км'],
+            ['Хозяин', o.host.name], ['От Солнца', U.fmtDist(o.dist)]);
+        }
       }
       R.push(['От камеры', () => U.fmtDist(Math.max(0, v3.dist(this.cam.pos, o.pos || [0, 0, 0]) - (o.radius || 0)))]);
       R.push(['Источник', this.source(o)]);
@@ -389,7 +397,7 @@
       }
       if (o.isSun) return 'IAU / NASA';
       if (o.kind === 'dso') return o.ext ? (o.messier ? 'Каталог Мессье · OpenNGC' : 'NGC/IC · OpenNGC') : 'Встроенный каталог (SIMBAD / NED)' + (o.messier ? ' · Мессье' : '');
-      if (o.kind === 'bh') return 'GRAVITY / EHT (2022)';
+      if (o.kind === 'bh') return o.src ? 'Масса: ' + o.src + '; изображение — метрика Шварцшильда' : 'GRAVITY / EHT (2022)';
       return 'Модель Галактики (визуализация)';
     }
     renderRows() {
@@ -405,9 +413,11 @@
       }
     }
     flyTo(o) {
+      this.scene.lastCam = this.cam.pos;
       const t = this.scene.makeTarget(o);
       this.cam.flyTo(t);
-      this.toast('Автопилот → ' + o.name + '  (любая клавиша движения — перехват)');
+      this.toast('Автопилот → ' + t.name + '  (любая клавиша движения — перехват)');
+      if (o.bhChild && t.obj !== o.bhChild) setTimeout(() => this.toast('Повторное «Лететь» — нырнуть в ядро, к горизонту событий'), 2500);
     }
 
     /* ---------------- ввод ---------------- */

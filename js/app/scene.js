@@ -32,6 +32,28 @@
         info: 'Сверхмассивная чёрная дыра в центре Млечного Пути: ~4.3 млн масс Солнца, радиус горизонта ~12 млн км. Изображение — трассировка лучей в метрике Шварцшильда; аккреционный диск показан художественно ярким.',
         type: 'Сверхмассивная чёрная дыра', dist: MW.C.GC_DIST,
       };
+      // Сверхмассивные чёрные дыры активных ядер и чёрные дыры звёздной массы: масса (M☉) → радиус Шварцшильда
+      // (Rs = 2GM/c² ≈ 2,953 км · M). Рисуются тем же шейдером, что Стрелец A* (метрика Шварцшильда).
+      const AGN = [
+        ['ton618', 6.6e10, true, 'Квазар TON 618 (z = 2,22): одна из самых массивных известных чёрных дыр. Оценки массы 40–66 млрд M☉ (по ширине линий); радиус горизонта ~1 300 а. е. — больше орбиты Плутона в 30 раз.', 'Shemmer et al. 2004; Ge et al. 2019'],
+        ['m87', 6.5e9, true, 'M87* — первая сфотографированная чёрная дыра (Event Horizon Telescope, 2019). Из ядра бьёт релятивистский джет длиной ~5 000 св. лет.', 'EHT Collaboration 2019'],
+        ['3c273', 8.9e8, true, 'Ядро квазара 3C 273 — самого яркого квазара на небе; масса ~0,9 млрд M☉ (реверберационное картирование), джет длиной ~200 000 св. лет.', 'Paltani & Türler 2005'],
+        ['cyga', 2.5e9, true, 'Ядро радиогалактики Лебедь A: ~2,5 млрд M☉; два джета питают гигантские радиолепестки.', 'Tadhunter et al. 2003'],
+        ['ngc5128', 5.5e7, true, 'Ядро Центавра A — ближайшей радиогалактики: ~55 млн M☉, джеты и радиолепестки на сотни тысяч св. лет.', 'Neumayer 2010'],
+        ['cygx1', 21.2, false, 'Лебедь X-1 — первая открытая чёрная дыра звёздной массы (21 M☉); аккреционный диск питается ветром голубого сверхгиганта.', 'Miller-Jones et al. 2021'],
+      ];
+      this.blackHoles = [this.bh];
+      for (const [hid, M, jet, info, src] of AGN) {
+        const host = MW.catalog.dsoById[hid];
+        if (!host) continue;
+        const h = MW.rng.mulberry32(MW.rng.hashStr(host.id));
+        const nn = host.normal || v3.norm([h.gauss(), h.gauss(), h.gauss()]);   // та же ось, что у джетов в рендере DSO
+        const rs = M * 2.953 / 9.4607e12;
+        const bh = { kind: 'bh', id: 'bh_' + hid, name: 'Чёрная дыра · ' + host.name, pos: host.pos, rs, frame: MW.solar.bodyFrame(nn), normal: nn,
+          host, mass: M, jet, info, src, type: M > 1e5 ? 'Сверхмассивная чёрная дыра (активное ядро)' : 'Чёрная дыра звёздной массы', dist: host.dist };
+        host.bhChild = bh;
+        this.blackHoles.push(bh);
+      }
       this.galaxyView = { kind: 'view', id: 'mwview', name: 'Обзор Млечного Пути', pos: MW.C.GC_POS.slice(), info: 'Вид на нашу Галактику сверху: 4 главных рукава, перемычка и балдж. Солнце — в рукаве Ориона.' };
       this.webView = { kind: 'view', id: 'webview', name: 'Космическая паутина', pos: [0, 0, 0], arrive: 1.15e10, viewDirRaw: [0.4, -0.5, 0.75],
         src: 'Структура — синтетическая (джиттер-решётка ~700 млн св. лет, крупнее реальной для наглядности); галактики ближе 250 млн св. лет — OpenNGC',
@@ -119,7 +141,7 @@
         const k = o.vis === 'galaxy' ? 0.5 : 0.9;
         d = Math.min(d, Math.max(v3.dist(p, o.pos) - o.radius * k, o.radius * 0.08));
       }
-      d = Math.min(d, Math.max(v3.dist(p, this.bh.pos) - this.bh.rs * 2.5, this.bh.rs * 0.5));
+      for (const bh of this.blackHoles) d = Math.min(d, Math.max(v3.dist(p, bh.pos) - bh.rs * 2.5, bh.rs * 0.5));
       return Number.isFinite(d) ? Math.max(d, 2e-13) : 1;
     }
 
@@ -140,8 +162,10 @@
           if (d < r) { cam.pos = v3.madd(b.pos, rel, r / Math.max(d, 1e-30)); cam.vel = [0, 0, 0]; }
         }
       }
-      const rb = v3.sub(cam.pos, this.bh.pos), db = v3.len(rb);
-      if (db < this.bh.rs * 1.6) { cam.pos = v3.madd(this.bh.pos, rb, this.bh.rs * 1.6 / Math.max(db, 1e-30)); cam.vel = [0, 0, 0]; }
+      for (const bh of this.blackHoles) {
+        const rb = v3.sub(cam.pos, bh.pos), db = v3.len(rb);
+        if (db < bh.rs * 1.6) { cam.pos = v3.madd(bh.pos, rb, bh.rs * 1.6 / Math.max(db, 1e-30)); cam.vel = [0, 0, 0]; }
+      }
     }
 
     // авто-привязка камеры к ближайшему телу (камера «едет» вместе с планетой)
@@ -207,6 +231,8 @@
         return { obj: this.solar.star, name: 'Солнечная система', getPos: () => [0, 0, 0], arrive: 38 * MW.C.AU_LY, viewDir: vd };
       }
       if (o.kind === 'dso') {
+        // активное ядро: первый «Лететь» — к галактике и джетам, повторный (камера уже рядом) — в самое ядро
+        if (o.bhChild && this.lastCam && v3.dist(this.lastCam, o.pos) < o.radius * 4) return this.makeTarget(o.bhChild);
         const k = o.vis === 'galaxy' ? 2.2 : o.vis === 'globular' ? 2.6 : o.vis === 'cluster' ? 3.2 : 2.4;
         return { obj: o, name: o.name, getPos: () => o.pos, arrive: o.radius * k };
       }

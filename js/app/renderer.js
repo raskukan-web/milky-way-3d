@@ -802,8 +802,10 @@
         gl.drawArrays(gl.LINES, 0, lines.length / 7);
       }
 
-      // 6. Стрелец A*: гравитационная линза + аккреционный диск
-      const bh = sc.bh;
+      // 6. Чёрная дыра: гравитационная линза + аккреционный диск. Из всех (Стрелец A*, ядра квазаров и
+      //    радиогалактик, Лебедь X-1) берётся та, чьё эйнштейновское кольцо на экране больше.
+      let bh = sc.bh, best = -1;
+      for (const b of sc.blackHoles || [sc.bh]) { const th = Math.sqrt(2 * b.rs / Math.max(v3.dist(b.pos, cam.pos), 1e-30)); if (th > best) { best = th; bh = b; } }
       const relB = v3.sub(bh.pos, cam.pos), DB = v3.len(relB);
       const thetaE = Math.sqrt((2 * bh.rs) / DB);
       if (thetaE * this.pxPerRad > 1.5) {
@@ -822,7 +824,8 @@
           p.set('u_scale', DB / bh.rs);
           const fr = bh.frame;
           p.set('u_rot', MW.m3.toGL(MW.m3.transpose(MW.m3.fromCols(fr.x, fr.y, fr.z))));
-          p.set('u_rIn', 3.0); p.set('u_rOut', 16.0); p.set('u_bright', 0.5);
+          // ядра квазаров — сверхъяркий диск и джеты у основания; Стрелец A* — спокойный тусклый диск
+          p.set('u_rIn', 3.0); p.set('u_rOut', 16.0); p.set('u_bright', bh.host ? (bh.mass > 1e5 ? 0.8 : 0.6) : 0.5); p.set('u_jet', bh.jet ? 1 : 0);
           p.tex('u_scene', this.tA.tex);
           this.glc.noBlend();
           gl.bindVertexArray(this.quadVAO || (this.quadVAO = this.glc.vao([], true)));

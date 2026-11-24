@@ -27,6 +27,7 @@
       c.toBlob((b) => fetch('/' + name, { method: 'POST', body: b }).then(() => res(c.width + 'x' + c.height), () => res('fail')), 'image/jpeg', 0.88);
     }));
     window.tp = (o, mul, dir) => {
+      if (app.scene) app.scene.lastCam = app.cam.pos;
       const t = app.scene.makeTarget(o), p = t.getPos();
       const d = dir || t.viewDir || (t.litDir ? MW.v3.norm(MW.v3.add(MW.v3.norm(MW.v3.sub(app.cam.pos, p)), MW.v3.scale(t.litDir, 1.3))) : MW.v3.norm(MW.v3.sub(app.cam.pos, p)));
       app.cam.cancelAuto(); app.cam.pos = MW.v3.madd(p, d, t.arrive * (mul || 1)); app.cam.lookAt(t.aimAt ? t.aimAt(app.cam.pos) : p, app.cam.up); app.cam.anchor = t.body || null;

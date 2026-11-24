@@ -198,7 +198,7 @@ uniform vec3 u_c;
 uniform float u_rb, u_full;
 uniform float u_scale;        // D / Rs
 uniform mat3 u_rot;           // мир → система диска (z — ось вращения)
-uniform float u_time, u_rIn, u_rOut, u_bright;
+uniform float u_time, u_rIn, u_rOut, u_bright, u_jet;
 uniform sampler2D u_scene;
 uniform mat4 u_view, u_proj;
 out vec4 o;
@@ -274,6 +274,14 @@ void main(){
         col += T * dc * opa;
         T *= 1.0 - opa * 0.92;
       }
+    }
+    // релятивистские джеты у основания: узкие конусы вдоль оси вращения (голубое синхротронное свечение)
+    if (u_jet > 0.5){
+      float az = abs(np.z), rho = length(np.xy);
+      float jw = 0.7 + 0.11 * az;
+      float jet = exp(-pow(rho / jw, 2.0)) * smoothstep(1.8, 5.0, az) * exp(-az / (Rb * 0.45));
+      float knots = 0.7 + 0.3 * sin(az * 0.9 - u_time * 3.0);
+      col += T * vec3(0.5, 0.68, 1.0) * jet * knots * dt * 0.22;
     }
     pos = np; vel = normalize(nv);
     if (T < 0.01) break;
