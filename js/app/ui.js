@@ -447,18 +447,45 @@
       // (шаг масштабируется расстоянием до ближайшего объекта, как у колеса и клавиш).
       const touches = new Map();
       let pinch = null;
+      // Поворот касанием привязан к размеру экрана: свайп через всю ширину — ~205° взгляда, а рядом с планетой
+      // или звездой (камера «привязана» к телу) — облёт ~330° вокруг него; по вертикали — ~115° / ~180°.
+      // Один «пиксель» mouseLook поворачивает на ~4,87e-5 рад при поле зрения 60°, orbitDelta — на 0,005 рад.
+      const lookUnit = () => 4.87e-5 * (this.cam.fov / (60 * MW.C.DEG));
+      const applyTouch = (dx, dy, mode) => {
+        const cam = this.cam, W = Math.max(cv.clientWidth, 1), H = Math.max(cv.clientHeight, 1);
+        if (mode === 'orbit') { cam.orbitDelta[0] += dx * (5.8 / W) / 0.005; cam.orbitDelta[1] += dy * (3.1 / H) / 0.005; }
+        else { cam.mouseLook[0] += dx * (3.6 / W) / lookUnit(); cam.mouseLook[1] += dy * (2.0 / H) / lookUnit(); }
+      };
+      // Инерция после смахивания: скорость пальца затухает за ~0,6 с; любое новое касание её сразу гасит.
+      const startInertia = (vx, vy, mode) => {
+        const lim = 5000, sp = Math.hypot(vx, vy);
+        if (sp < 60) return;
+        if (sp > lim) { vx *= lim / sp; vy *= lim / sp; }
+        const st = this._inertia = { vx: vx * 0.6, vy: vy * 0.6, mode, t: performance.now() };
+        const step = (now) => {
+          if (this._inertia !== st) return;
+          const dt = Math.min(0.05, (now - st.t) / 1000); st.t = now;
+          applyTouch(st.vx * dt, st.vy * dt, st.mode);
+          const k = Math.exp(-dt / 0.15);
+          st.vx *= k; st.vy *= k;
+          if (Math.hypot(st.vx, st.vy) > 15 && !this.cam.auto) requestAnimationFrame(step); else this._inertia = null;
+        };
+        requestAnimationFrame(step);
+      };
       const pinchDist = () => { const p = [...touches.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
       const touchEnd = (e) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; };
       cv.addEventListener('pointercancel', (e) => { touchEnd(e); down = null; });
       cv.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'touch') {
+          this._inertia = null;                        // новое касание останавливает докрутку
           touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
           if (touches.size === 2) { down = null; pinch = { d: pinchDist() }; try { cv.setPointerCapture(e.pointerId); } catch (err) { /* */ } return; }
           if (touches.size > 2) return;
         }
         if (e.button === 1) e.preventDefault();
         try { cv.setPointerCapture(e.pointerId); } catch (err) { /* синтетические события */ }
-        down = { x: e.clientX, y: e.clientY, b: e.button, moved: 0, lx: e.clientX, ly: e.clientY, started: false };
+        down = { x: e.clientX, y: e.clientY, b: e.button, moved: 0, lx: e.clientX, ly: e.clientY, started: false,
+          touch: e.pointerType === 'touch', vx: 0, vy: 0, t: performance.now() };
       });
       const tip = $('#tip');
       cv.addEventListener('pointerleave', () => (tip.style.display = 'none'));
@@ -466,11 +493,14 @@
         if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
           touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
           if (pinch && touches.size >= 2) {
-            const d = pinchDist(), k = Math.log(Math.max(d, 1) / Math.max(pinch.d, 1));
+            // раздвинуть пальцы вдвое — пройти ~87 % пути до ближайшей поверхности; свести вдвое — отлететь
+            // в ~8 раз дальше: быстро, как колесо мыши, и без проскока сквозь планету
+            const d = pinchDist(), r = Math.max(d, 1) / Math.max(pinch.d, 1);
             pinch.d = d;
             const cam = this.cam;
             cam.cancelAuto();
-            cam.pos = v3.madd(cam.pos, cam.forward, Math.max(cam.dEff || 1e-9, 1e-12) * k * 2.2);
+            const f = MW.util.clamp(1 - Math.pow(r, -3), -8, 0.9);
+            cam.pos = v3.madd(cam.pos, cam.forward, Math.max(cam.dEff || 1e-9, 1e-12) * f);
             return;
           }
         }
@@ -498,6 +528,16 @@
         if (down.moved < 3) return;
         const cam = this.cam;
         cam.viewH = cv.clientHeight;
+        if (down.touch) {
+          cam.cancelAuto();
+          // у планеты/звезды — облёт вокруг неё, иначе — поворот взгляда
+          if (!down.started) { down.started = true; down.mode = cam.anchor ? 'orbit' : 'look'; if (down.mode === 'orbit') { cam.pivot = this.orbitPivot(); cam.vel = [0, 0, 0]; } }
+          applyTouch(dx, dy, down.mode);
+          const now = performance.now(), dts = Math.max((now - down.t) / 1000, 1e-3);
+          down.t = now;
+          down.vx = down.vx * 0.4 + 0.6 * dx / dts; down.vy = down.vy * 0.4 + 0.6 * dy / dts;
+          return;
+        }
         if (down.b === 0) { cam.cancelAuto(); cam.mouseLook[0] += dx; cam.mouseLook[1] += dy; return; }
         if (down.b !== 1 && down.b !== 2) return;
         cam.cancelAuto();
@@ -516,6 +556,8 @@
           }
           this.lastClick = { o, t: now };
         }
+        // докрутка по инерции, если палец отпущен в движении (а не после паузы)
+        if (down && down.touch && down.moved >= 4 && performance.now() - down.t < 80) startInertia(down.vx, down.vy, down.mode || 'look');
         down = null;
         if (e.pointerType === 'touch') touchEnd(e);
       });
