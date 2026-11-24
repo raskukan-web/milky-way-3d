@@ -50,7 +50,7 @@
   class Renderer {
     constructor(glc, scene) {
       this.glc = glc; this.gl = glc.gl; this.scene = scene;
-      this.s = { renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 8.5, quality: MW.MOBILE ? 0.15 : 1, artistic: true, panorama: true, panoGain: 1.0 };
+      this.s = { renderScale: 1, bloom: 0.5, exposure: 1.0, constellations: true, grid: false, orbits: true, galaxyBright: 1, magLimit: 8.5, quality: MW.Q.q, lens: MW.Q.post, autoExposure: true, artistic: true, panorama: true, panoGain: 1.0 };
       this.width = 1; this.height = 1;
       this.compile();
       this.buildStatic();
@@ -101,7 +101,7 @@
       const mw = MW.galaxy.buildMilkyWay(q);
       this.mwLum = glc.instanced(mw.lum, L); this.mwDust = glc.instanced(mw.dust, L); this.mwHalo = glc.instanced(mw.halo, L); this.mwGas = glc.instanced(mw.gas, L);
       const cat = MW.catalog, GB = MW.galaxy;
-      const qg = MW.MOBILE ? 0.06 : q;   // галактики-соседи на мобильных — ещё меньше частиц (их сотни)
+      const qg = MW.QUALITY === 'ultra' ? q : q * 0.45;   // галактики-соседи (их сотни) — на слабых пресетах ещё меньше частиц
       // галактики Местной группы (M31, M33, Магеллановы Облака, карлики)
       this.extGal = [];
       for (const o of cat.dsos.filter((d) => d.vis === 'galaxy' && !d.lite && d.normal)) {
@@ -125,7 +125,7 @@
       this.clusters = [];
       const addCl = (o, stars, glow) => this.clusters.push({ obj: o, stars: glc.instanced(stars, L), glow: glow ? glc.instanced(glow, L) : null });
       for (const o of cat.dsos.filter((d) => d.vis === 'globular' && !d.lite)) {
-        const g = GB.buildGlobular(MW.rng.hashStr(o.id) % 100000, o.radius, Math.round((o.id === 'omegacen' ? 40000 : o.id === 'm13' ? 28000 : o.ext ? 1500 : 9000) * (MW.MOBILE ? 0.11 : Math.max(q, 0.3))));
+        const g = GB.buildGlobular(MW.rng.hashStr(o.id) % 100000, o.radius, Math.round((o.id === 'omegacen' ? 40000 : o.id === 'm13' ? 28000 : o.ext ? 1500 : 9000) * (MW.QUALITY === 'ultra' ? 1 : q)));
         addCl(o, g.stars, g.glow);
       }
       // рассеянные скопления из OpenNGC (Мессье/NGC)
@@ -183,7 +183,7 @@
       });
       this.buildDeepSky();
       // крупномасштабная структура Вселенной (синтетическая) и квазары
-      const web = MW.cosmos.buildCosmicWeb(MW.MOBILE ? 40000 : 900000);
+      const web = MW.cosmos.buildCosmicWeb(MW.Q.web);
       this.webBuf = glc.instanced(web.web, L);
       this.qsoBuf = glc.instanced(web.qso, L);
       this.webInfo = web;
@@ -645,6 +645,7 @@
       p.set('u_magLim', this.dsoMagLim);
       p.set('u_scale', MW.dpr() * this.s.renderScale); p.set('u_bright', 1.0);
       p.set('u_bgShrink', this.focusK || 0);
+      p.set('u_marchK', MW.Q.march);
       this.glc.blendAdd();
       this.drawInst(this.dsoBuf);
     }
@@ -683,7 +684,8 @@
       const prPx = this.pxRadius(Rb, D) * MW.dpr() * this.s.renderScale;
       const half = D < Rb * 1.05 || prPx > this.height * 0.18;
       const gl = this.gl;
-      p.set('u_steps', half ? 40 : 34);
+      p.set('u_steps', Math.max(12, Math.round((half ? 40 : 34) * MW.Q.march)));
+      p.set('u_marchK', MW.Q.march);
       if (half) {
         this.glc.bindTarget(this.tHalf);
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.clearColor(0, 0, 0, 1);
@@ -823,6 +825,7 @@
           const p = this.common(this.pBH);
           p.set('u_c', f32(v3.scale(relB, 1 / DB))); p.set('u_rb', Rb / DB); p.set('u_full', DB < Rb * 1.05 ? 1 : 0);
           p.set('u_scale', DB / bh.rs);
+          p.set('u_marchK', MW.Q.march);
           const fr = bh.frame;
           p.set('u_rot', MW.m3.toGL(MW.m3.transpose(MW.m3.fromCols(fr.x, fr.y, fr.z))));
           // ядра квазаров — сверхъяркий диск и джеты у основания; Стрелец A* — спокойный тусклый диск
@@ -965,7 +968,8 @@
       const gl = this.gl;
       this.glc.noBlend();
       let prev = src;
-      for (let i = 0; i < this.mips.length; i++) {
+      const doBloom = MW.Q.post && this.s.bloom > 0.001;
+      for (let i = 0; i < (doBloom ? this.mips.length : 0); i++) {
         const t = this.mips[i];
         this.glc.bindTarget(t);
         const p = this.pDown.use();
@@ -976,7 +980,7 @@
         prev = t;
       }
       this.glc.blendAdd();
-      for (let i = this.mips.length - 1; i > 0; i--) {
+      for (let i = doBloom ? this.mips.length - 1 : 0; i > 0; i--) {
         const from = this.mips[i], to = this.mips[i - 1];
         this.glc.bindTarget(to);
         const p = this.pUp.use();
@@ -991,7 +995,7 @@
       // на галактических масштабах bloom слабее: звёздные россыпи резкие, без мутного ореола
       const sd = v3.len(this.cam.pos);
       const galScale = MW.util.smoothstep(4000, 40000, sd) * (1 - MW.util.smoothstep(3e7, 2e8, sd));
-      c.set('u_bloomStr', this.s.bloom * (1 - 0.6 * galScale)); c.set('u_exposure', this.s.exposure * (this.autoExp || 1));
+      c.set('u_bloomStr', doBloom ? this.s.bloom * (1 - 0.6 * galScale) : 0); c.set('u_exposure', this.s.exposure * (this.autoExp || 1));
       c.set('u_time', this.scene.realTime); c.set('u_vignette', 0.35); c.set('u_art', this.s.artistic ? 1 : 0);
       this.glc.fullscreen();
     }

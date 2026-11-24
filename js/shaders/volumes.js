@@ -198,7 +198,7 @@ uniform vec3 u_c;
 uniform float u_rb, u_full;
 uniform float u_scale;        // D / Rs
 uniform mat3 u_rot;           // мир → система диска (z — ось вращения)
-uniform float u_time, u_rIn, u_rOut, u_bright, u_jet;
+uniform float u_time, u_rIn, u_rOut, u_bright, u_jet, u_marchK;
 uniform sampler2D u_scene;
 uniform mat4 u_view, u_proj;
 out vec4 o;
@@ -259,7 +259,7 @@ void main(){
     rmin = min(rmin, r);
     if (r < 1.0){ captured = true; break; }
     if (r > Rb * 1.01 && dot(pos, vel) > 0.0) break;
-    float dt = clamp(0.08 * (r - 0.9), 0.015, 2.5);
+    float dt = clamp(0.08 * (r - 0.9), 0.015, 2.5) / clamp(u_marchK > 0.0 ? u_marchK : 1.0, 0.3, 1.0);   // слабые пресеты — крупнее шаг
     vec3 acc = -1.5 * h2 * pos / (r2 * r2 * r);
     vec3 np = pos + vel * dt + 0.5 * acc * dt * dt;
     vec3 acc2 = -1.5 * h2 * np / pow(dot(np, np), 2.5);

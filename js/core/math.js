@@ -235,10 +235,43 @@ MW.color = {
 
 /* --------------------------- утилиты --------------------------------- */
 // плотность пикселей ограничена 1.5 — без избыточного рендера на HiDPI-экранах
-// Телефоны и планшеты (включая iPadOS, который представляется как Mac с сенсорным экраном): меньше частиц и
-// pixelRatio = 1 — иначе мобильный GPU упирается в память и вкладка падает
+// Телефоны и планшеты (включая iPadOS, который представляется как Mac с сенсорным экраном)
 MW.MOBILE = /Mobi|Android|iPad|iPhone/i.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-MW.dpr = () => (MW.MOBILE ? 1 : Math.min(window.devicePixelRatio || 1, 1.5));
+/* Пресеты качества. q — доля частиц модели Галактики (и соседних галактик), web — точек космической паутины,
+   dpr — потолок devicePixelRatio, march — множитель шагов трассировки (туманности, остатки сверхновых, чёрные
+   дыры), post — тяжёлые полноэкранные проходы (bloom, лучи и блики объектива). */
+MW.PRESETS = {
+  ultra: { name: 'Ультра (RTX)', q: 1, web: 900000, dpr: 1.5, march: 1, post: true },
+  medium: { name: 'Среднее (ноутбуки / планшеты)', q: 0.32, web: 250000, dpr: 1.25, march: 0.45, post: true },
+  low: { name: 'Слабое железо', q: 0.11, web: 80000, dpr: 1.0, march: 0.33, post: false },
+};
+// Строка GPU (WEBGL_debug_renderer_info) — по ней автоопределение мощности
+MW.gpuString = (() => {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');
+    if (!gl) return '';
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const s = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
+    return String(s || '');
+  } catch (e) { return ''; }
+})();
+// Автоопределение: дискретные RTX/GTX 16+/RX 5000+/Arc A7 → «Ультра»; встроенная графика (Intel, AMD Radeon
+// Graphics/Vega, Apple) и мобильные GPU (Mali, Adreno, PowerVR) → «Среднее»; мало памяти → «Слабое железо».
+MW.detectPreset = () => {
+  const g = MW.gpuString, mem = navigator.deviceMemory || 8;
+  const strong = /RTX|GTX 1[6-9]|GTX [2-9]\d{2}0|RX [5-9]\d{3}|RX 7\d{3}|Radeon Pro W|Quadro|Arc A[57]/i.test(g);
+  const weak = /Mali|Adreno|PowerVR|Intel|Iris|UHD|HD Graphics|Radeon\(TM\) Graphics|Radeon\(TM\) (R\d|Vega)|Radeon Graphics|Vega \d+|Apple|SwiftShader|llvmpipe|Basic Render/i.test(g);
+  if (/SwiftShader|llvmpipe|Basic Render/i.test(g) || mem <= 3) return 'low';
+  if (MW.MOBILE) return mem <= 4 ? 'low' : 'medium';
+  if (strong && !weak) return 'ultra';
+  if (weak) return mem <= 4 ? 'low' : 'medium';
+  return 'medium';   // неизвестный GPU — безопасный средний пресет
+};
+MW.QUALITY = (() => { let v = null; try { v = localStorage.getItem('mw.quality'); } catch (e) { /* приватный режим */ } return MW.PRESETS[v] ? v : MW.detectPreset(); })();
+MW.QUALITY_AUTO = (() => { try { return !localStorage.getItem('mw.quality'); } catch (e) { return true; } })();
+MW.Q = MW.PRESETS[MW.QUALITY];
+MW.dpr = () => Math.min(window.devicePixelRatio || 1, MW.Q.dpr);
 // Строгий научный режим: только реальные объекты из каталогов (без процедурных звёзд и выдуманных планет).
 // Частицы галактики остаются некликабельной визуализацией формы Млечного Пути.
 MW.STRICT = true;

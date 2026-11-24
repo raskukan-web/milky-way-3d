@@ -166,6 +166,15 @@
       tog('#tGrid', () => s.grid, (v) => (s.grid = v));
       tog('#tOrbits', () => s.orbits, (v) => (s.orbits = v));
       tog('#tLens', () => s.lens !== false, (v) => (s.lens = v));
+      // пресет качества: выбор сохраняется в localStorage; число частиц задаётся при сборке сцены — нужна перезагрузка
+      const qs = $('#sQuality');
+      qs.value = MW.QUALITY;
+      $('#presetInfo').textContent = MW.Q.name + (MW.QUALITY_AUTO ? ' (автоопределение)' : ' (выбран вручную)');
+      qs.onchange = () => {
+        try { localStorage.setItem('mw.quality', qs.value); } catch (e) { /* приватный режим */ }
+        this.toast('Качество: ' + MW.PRESETS[qs.value].name + ' — перезагрузка…');
+        setTimeout(() => location.reload(), 600);
+      };
       tog('#tAutoExp', () => s.autoExposure !== false, (v) => (s.autoExposure = v));
       const sl = (id, key, fmt) => {
         const el = $(id), out = $(id + 'V');
@@ -193,6 +202,10 @@
       // узкий экран (телефон, планшет в портрете): панель по умолчанию свёрнута, раскрывается кнопкой ☰
       if (MW.MOBILE) document.body.classList.add('mobile');
       if (window.innerWidth < 900) document.body.classList.add('panel-hidden');
+      // на узком экране кнопка панели подписана «Каталог»
+      const pt = $('#panelToggle');
+      const lbl = () => { const narrow = window.innerWidth < 900; pt.textContent = narrow ? '☰ Каталог' : '☰'; pt.classList.toggle('wide', narrow); };
+      lbl(); window.addEventListener('resize', lbl);
     }
     timeStep(dir) {
       const steps = [-31557600, -2592000, -86400, -3600, -60, 1, 60, 3600, 86400, 2592000, 31557600];

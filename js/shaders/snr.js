@@ -63,13 +63,15 @@ void snrSample(vec3 p, float s, int typ, out vec3 e, out float a){
   }
 }
 // трассировка через единичную сферу (ro, rd — в единицах радиуса остатка)
+uniform float u_marchK;   // множитель шагов (пресет качества)
 vec4 snrMarch(vec3 ro, vec3 rd, float s, int typ, float jitter){
   float b = dot(ro, rd), c = dot(ro, ro) - 1.0, h = b * b - c;
   if (h <= 0.0) return vec4(0.0);
   h = sqrt(h);
   float t0 = max(-b - h, 0.0), t1 = -b + h;
   if (t1 <= 0.0) return vec4(0.0);
-  float dt = (t1 - t0) / 44.0;
+  float nSt = max(14.0, floor(44.0 * (u_marchK > 0.0 ? u_marchK : 1.0)));
+  float dt = (t1 - t0) / nSt;
   float t = t0 + jitter * dt;
   vec3 col = vec3(0.0); float T = 1.0;
   for (int i = 0; i < 44 + u_zero; i++){
