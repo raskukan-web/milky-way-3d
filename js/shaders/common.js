@@ -136,6 +136,10 @@ uniform float u_full;  // 1 = на весь экран
 void main(){
   if (u_full > 0.5){ gl_Position = vec4(a_corner, 0.0, 1.0); return; }
   float d = length(u_c);
+  // сфера близко или центр не впереди камеры: квад пересёк бы плоскость камеры (обрезка прямой линией) —
+  // рисуем на весь экран, фрагментный шейдер сам отсечёт лучи мимо сферы
+  float zc = (u_view * vec4(u_c, 0.0)).z;
+  if (d < u_rb * 2.2 || (zc > -u_rb * 1.3 && d < u_rb * 8.0)){ gl_Position = vec4(a_corner, 0.0, 1.0); return; }
   vec3 n = u_c / d;
   float q = max(d * d - u_rb * u_rb, 1e-8);
   float dp = q / d;

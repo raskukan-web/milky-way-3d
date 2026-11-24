@@ -373,10 +373,11 @@
         const anc = this.cam.anchor;
         const near = anc ? 1 - 0.75 * MW.util.smoothstep(40, 200, this.pxRadius(anc.radius, v3.dist(cam, anc.pos))) : 1;
         for (const sys of this.scene.systems) for (const b of sys.bodies) {
+          if (this.surface && this.surface.active && b === this.surface.body) continue;
           const center = b.parentBody ? b.parentBody.pos : sys.star.pos;
           const rOrb = v3.dist(b.pos, center);
           const dCam = v3.dist(cam, center);
-          let a = 0.5 * near * (1 - MW.util.smoothstep(rOrb * 60, rOrb * 400, dCam));
+          let a = 0.5 * near * (1 - MW.util.smoothstep(rOrb * 60, rOrb * 400, dCam)) * (this.surface && this.surface.active ? 0.3 : 1);
           if (b.kind === 'moon') a *= 0.55 * (1 - MW.util.smoothstep(rOrb * 15, rOrb * 60, dCam));
           if (a < 0.01) continue;
           const period = b.periodD || 365.25 * Math.pow(b.aAU || 1, 1.5);
@@ -839,6 +840,7 @@
       }
 
       // 7. тела: звёзды и планеты (от дальних к ближним)
+      const surf = this.surface && this.surface.active && this.surface.glReady() ? this.surface : null;
       const draw = [];
       for (const sys of sc.systems) {
         const st = sys.star;
@@ -846,6 +848,7 @@
         const R = st.radius;
         if (this.pxRadius(R * 4.2, D) > 1.5 && this.inView(rel, D, R * 4.2)) draw.push({ D, f: () => this.drawStarBody(st, D, rel) });
         for (const b of sys.bodies) {
+          if (surf && b === surf.body) continue;      // тело под ногами рисует ландшафт
           const relb = v3.sub(b.pos, cam.pos), Db = v3.len(relb);
           const Rb = b.radius * Math.max(b.ring ? b.ring[1] : 1.1, b.exo && b.exo[2] ? b.exo[2] * 3 + 2 : 0);
           if (this.pxRadius(b.radius, Db) > 0.6 && this.inView(relb, Db, Rb)) draw.push({ D: Db, f: () => this.drawPlanet(b, Db, relb) });
@@ -869,6 +872,8 @@
       for (const d of draw) d.f();
       this.stats.bodies = draw.length;
 
+      // 7b. на поверхности: атмосфера и небо планеты, ландшафт, марево
+      if (surf) target = surf.render(this, target);
       // 8. оптика камеры (лучи и блики ярких звёзд), автоэкспозиция, bloom + композитинг
       this.drawLensEffects(target);
       this.updateExposure(target);
@@ -904,9 +909,19 @@
         const x = Math.max(0, 1.3 - m);
         const len = (6 + 0.1 * x * x) * diskFade;          // px (при высоте кадра 1080)
         const I = (0.3 + 0.012 * x * x) * diskFade;
-        const Iraw = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40) * diskFade;   // для автоэкспозиции
+        let Iraw = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40) * diskFade;   // для автоэкспозиции
+        // на поверхности: звезда системы гаснет в атмосфере (закат, дымка Титана), прочие — в свете дневного неба
+        const sf = this.surface && this.surface.active ? this.surface : null;
+        let tK = 1;
+        if (sf) {
+          const st = sf.body.system.star;
+          // звезда системы: пропускание атмосферы; за горами (профиль рельефа к звезде) — лучей нет
+          tK = pos === st.pos ? (sf.sunElev() < (sf.horizonSun ?? -90) ? 0 : 0.2126 * sf.sunT[0] + 0.7152 * sf.sunT[1] + 0.0722 * sf.sunT[2]) : sf.veil;
+        }
+        if (tK < 0.02) return;
+        Iraw *= tK;
         const c = color || [1, 1, 1], mx = Math.max(c[0], c[1], c[2], 1e-3);
-        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I, len, mag: x, Iraw, col: c.map((v) => 0.5 * v / mx + 0.5) });
+        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I: I * tK, len: len * Math.sqrt(tK), mag: x, Iraw, col: c.map((v) => 0.5 * v / mx + 0.5) });
       };
       const RS = MW.C.RSUN_LY;
       for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag, sys.star.radius || (sys.star.radiusSun || 1) * RS);
@@ -933,7 +948,7 @@
       p.set('u_src', a); p.set('u_scol', c);
       // блики объектива и анаморфная полоса — только от действительно ярких источников (Солнце, звезда рядом)
       // блики объектива — только от очень яркого источника (Солнце не дальше ~орбиты Сатурна)
-      p.set('u_ghost', MW.util.clamp((src[0].mag - 20) / 6, 0, 1) * 0.25);
+      p.set('u_ghost', MW.util.clamp((src[0].mag - 20) / 6, 0, 1) * 0.25 * (this.surface && this.surface.active && this.surface.prof.atm ? 0.12 : 1));
       this.glc.bindTarget(target);
       this.glc.blendAdd();
       this.glc.fullscreen();
@@ -964,7 +979,7 @@
         this.stats.lumLog = lg; this.stats.brightFrac = br;
         const key = MW.util.clamp(Math.pow(2, (this.expKeyLog ?? -6.5) - lg), 0.05, 50);
         // Солнце/яркая звезда в кадре занимает доли процента площади — экспозицию снижаем и по яркости источника
-        this.expTarget = MW.util.clamp(Math.pow(key, 0.3), 0.62, 1.4) / (1 + 6 * br) / (1 + 0.15 * Math.log2(1 + Math.max(0, (this.lensPeak || 0) - 8) / 2));   // яркие звёзды неба (Сириус ~10) не в счёт
+        this.expTarget = MW.util.clamp(Math.pow(key, 0.3), 0.62, 1.4) / (1 + 6 * br) / (1 + 0.15 * Math.log2(1 + Math.max(0, (this.surface && this.surface.active ? 0 : this.lensPeak || 0) - 8) / 2));   // яркие звёзды неба (Сириус ~10) не в счёт
         this.glc.bindTarget(target);
       }
       const tau = this.expTarget < this.autoExp ? 0.5 : 1.6;
@@ -1003,7 +1018,7 @@
       // на галактических масштабах bloom слабее: звёздные россыпи резкие, без мутного ореола
       const sd = v3.len(this.cam.pos);
       const galScale = MW.util.smoothstep(4000, 40000, sd) * (1 - MW.util.smoothstep(3e7, 2e8, sd));
-      c.set('u_bloomStr', doBloom ? this.s.bloom * (1 - 0.6 * galScale) : 0); c.set('u_exposure', this.s.exposure * (this.autoExp || 1));
+      c.set('u_bloomStr', doBloom ? this.s.bloom * (1 - 0.6 * galScale) : 0); c.set('u_exposure', this.s.exposure * (this.autoExp || 1) * (this.surface && this.surface.active && this.surface.glReady() ? 2.2 : 1));   // на поверхности — «дневная» экспозиция
       c.set('u_time', this.scene.realTime); c.set('u_vignette', 0.35); c.set('u_art', this.s.artistic ? 1 : 0);
       this.glc.fullscreen();
     }

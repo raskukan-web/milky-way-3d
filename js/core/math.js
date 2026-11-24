@@ -241,9 +241,10 @@ MW.MOBILE = /Mobi|Android|iPad|iPhone/i.test(navigator.userAgent || '') || (navi
    dpr — потолок devicePixelRatio, march — множитель шагов трассировки (туманности, остатки сверхновых, чёрные
    дыры), post — тяжёлые полноэкранные проходы (bloom, лучи и блики объектива). */
 MW.PRESETS = {
-  ultra: { name: 'Ультра (RTX)', q: 1, web: 900000, dpr: 1.5, march: 1, post: true },
-  medium: { name: 'Среднее (ноутбуки / планшеты)', q: 0.32, web: 250000, dpr: 1.25, march: 0.45, post: true },
-  low: { name: 'Слабое железо', q: 0.11, web: 80000, dpr: 1.0, march: 0.33, post: false },
+  // terrain: сетка ландшафта у поверхности (лучи × кольца), шаги теней, делитель разрешения неба, микрорельеф
+  ultra: { name: 'Ультра (RTX)', q: 1, web: 900000, dpr: 1.5, march: 1, post: true, terrain: { az: 320, rings: 150, shadow: 10, skyDiv: 2, skySteps: 16, micro: 1 } },
+  medium: { name: 'Среднее (ноутбуки / планшеты)', q: 0.32, web: 250000, dpr: 1.25, march: 0.45, post: true, terrain: { az: 176, rings: 92, shadow: 5, skyDiv: 2, skySteps: 10, micro: 0.7 } },
+  low: { name: 'Слабое железо', q: 0.11, web: 80000, dpr: 1.0, march: 0.33, post: false, terrain: { az: 112, rings: 60, shadow: 0, skyDiv: 3, skySteps: 7, micro: 0.4 } },
 };
 // Строка GPU (WEBGL_debug_renderer_info) — по ней автоопределение мощности
 MW.gpuString = (() => {

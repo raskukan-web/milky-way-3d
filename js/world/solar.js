@@ -76,6 +76,10 @@
   // Спутники: a (км), период (сут), радиус (км)
   const MOONS = [
     { id: 'moon', tex: 'moon', texH: 0.14, name: 'Луна', parent: 'earth', aKm: 384400, periodD: 27.3217, radiusKm: 1737.4, type: 8, incl: 5.145, bump: 3, info: 'Единственный естественный спутник Земли. Тёмные пятна — базальтовые «моря».' },
+    { id: 'phobos', name: 'Фобос', parent: 'mars', aKm: 9376, periodD: 0.31891, radiusKm: 11.08, type: 0, col1: [0.22, 0.2, 0.18], col2: [0.36, 0.33, 0.3], bump: 7,
+      info: 'Ближний спутник Марса: обращается быстрее, чем Марс вращается, — с поверхности восходит на западе и пересекает небо за ~4,5 ч. Через ~50 млн лет разрушится приливами.' },
+    { id: 'deimos', name: 'Деймос', parent: 'mars', aKm: 23463, periodD: 1.26244, radiusKm: 6.2, type: 0, col1: [0.3, 0.27, 0.24], col2: [0.45, 0.41, 0.37], bump: 5,
+      info: 'Дальний спутник Марса: с поверхности — яркая звёздочка, медленно ползущая по небу ~2,5 суток от восхода до заката.' },
     { id: 'io', tex: 'io', texH: 0.08, name: 'Ио', parent: 'jupiter', aKm: 421700, periodD: 1.769, radiusKm: 1821.6, type: 9, bump: 3, info: 'Самое вулканически активное тело Солнечной системы.' },
     { id: 'europa', tex: 'europa', texAux: 'europa_mask', texH: 0.08, name: 'Европа', parent: 'jupiter', aKm: 671034, periodD: 3.551, radiusKm: 1560.8, type: 10, bump: 3, info: 'Ледяная кора скрывает подлёдный океан — кандидат на поиск жизни.' },
     { id: 'ganymede', tex: 'ganymede', texAux: 'ganymede_mask', texH: 0.1, name: 'Ганимед', parent: 'jupiter', aKm: 1070412, periodD: 7.155, radiusKm: 2634.1, type: 0, col1: [0.45, 0.42, 0.38], col2: [0.7, 0.67, 0.62], bump: 5, info: 'Крупнейший спутник в Солнечной системе, больше Меркурия.' },

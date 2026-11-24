@@ -46,11 +46,16 @@ void main(){
   v_rel = rel; v_nrm = a_nrm; v_col = a_col; v_par = vec4(R, a_par.yzw); v_I = I; v_pr = pr;
   // далёкие тусклые точки не рисуем
   if (pr < 2.0 && I < 0.003){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-  if (D < R * 1.08){ gl_Position = vec4(a_corner, 0.0, 1.0); v_px = a_corner * 1e4; return; }
   vec4 pv = u_view * vec4(rel, 1.0);
+  // вблизи (или когда объект сбоку/позади) — весь экран: квад иначе пересёк бы плоскость камеры,
+  // и объём (остаток сверхновой, туманность) обрезался бы прямой линией
+  bool vol = a_par.y > 2.5 && a_par.y < 6.5;
+  if (D < R * (vol ? 2.4 : 1.08) || (vol && pv.z > -R * 1.4 && pv.z < R && R > D * 0.05)){ gl_Position = vec4(a_corner, 0.0, 1.0); v_px = a_corner * 1e4; return; }
   if (pv.z > R){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-  float sizePx = max(pr * 1.08, 2.6 * u_scale);
-  float sizeW = sizePx * D / u_pxPerRad;
+  // полуразмер квада в плоскости центра: конус касательных к сфере (а не угловой радиус × 1,08)
+  float sinA = min(R / D, 0.999);
+  float sizeW = max(R / sqrt(1.0 - sinA * sinA) * (D / max(-pv.z, 1e-30)) * 1.04, 2.6 * u_scale * D / u_pxPerRad);
+  float sizePx = sizeW * u_pxPerRad / D;
   pv.xy += a_corner * sizeW;
   v_px = a_corner * sizePx;
   gl_Position = u_proj * pv;

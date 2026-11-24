@@ -41,6 +41,8 @@
         const t = app.scene.makeTarget({ kind: 'solarView' });
         app.cam.pos = MW.v3.scale(t.viewDir, t.arrive);
         app.cam.lookAt([0, 0, 0], MW.coords.ECL_POLE);
+        app.surface = new MW.Surface(app);
+        app.renderer.surface = app.surface;
         app.ui = new MW.UI(app);
         document.getElementById('gpuName').textContent = app.glc.renderer;
         document.getElementById('partCount').textContent = app.renderer.particleCount.toLocaleString('ru-RU');
@@ -57,7 +59,8 @@
             app.fps = app.fps * 0.95 + (1 / dt) * 0.05;
             app.scene.update(dt, app.cam);
             app.scene.applyAnchor(app.cam);
-            app.cam.update(dt, app.scene);
+            // на поверхности камерой управляет режим «На поверхности» (система координат тела)
+            if (!app.surface.update(dt)) app.cam.update(dt, app.scene);
             app.scene.collide(app.cam);
             app.renderer.render(app.cam, app.ui.selected);
             app.ui.frame(dt);

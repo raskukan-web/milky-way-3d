@@ -98,6 +98,40 @@
       for (const o of cat.binaries) add(o);
       for (const o of cat.hygStars) add(o, o.exoNames);
       for (const o of cat.dsos) add(o);
+      // Синонимы каталогов: GJ = Gl = Gliese = Глизе; альтернативные названия ближайших звёзд
+      const SYN = {
+        proxima: 'альфа центавра c | α центавра c | alpha centauri c | alpha cen c | alf cen c | α cen c | gj 551 | v645 cen | proxima centauri',
+        rigilkent: 'alpha centauri a | alpha cen a | alf cen a | ригель кентаурус | gj 559 a', alphacenb: 'alpha centauri b | alpha cen b | alf cen b | gj 559 b',
+        barnard: 'звезда барнарда | barnard | gj 699 | v2500 oph', wolf359: 'вольф 359 | wolf 359 | gj 406 | cn leo', lalande21185: 'лаланд 21185 | gj 411 | hd 95735',
+        sirius: 'α cma | alpha cma | alf cma | gj 244', epseri: 'eps eri | ε eri | gj 144', taucet: 'tau cet | τ cet | gj 71', luyten: 'luytens star | звезда лейтена | gj 273',
+        trappist: 'trappist-1 | 2mass j23062928-0502285', teegarden: 'teegardens star | звезда тигардена',
+      };
+      const gjSyn = (t) => {
+        const out = [];
+        t.replace(/(?:^|[\s|(])(?:gj|gl|gliese|глизе)\s?(\d+(?:\.\d+)?)(\s[a-z](?![a-zа-я0-9]))?(?![0-9])/g, (m, n, l) => {
+          const L = l ? l.trim() : '';
+          out.push(['gj ', 'gl ', 'gliese ', 'глизе '].map((q) => q + n + (L ? ' ' + L : '')).join(' | '));
+          return m;
+        });
+        return out.join(' | ');
+      };
+      for (const it of this.index) {
+        const extra = [SYN[it.o.id], gjSyn(it.t)].filter(Boolean).join(' | ');
+        if (extra) it.t += ' | ' + extra.toLowerCase();
+      }
+      // сами экзопланеты (система создаётся при выборе): «GJ 887 d», «Proxima Cen b», «Lacaille 9352 d»
+      for (const st of cat.exoStars || []) {
+        const H = st.exoNasa;
+        if (!H) continue;
+        const nm = (st.name || '').toLowerCase();
+        for (const pl of H.pl) {
+          const name = pl[0], letter = (name.match(/\s([a-z])$/) || [])[1] || '';
+          const ref = { kind: 'exoref', id: 'ref_' + name, name, star: st, mag: (st.mag ?? 20) + 0.01 };
+          let t = name.toLowerCase() + ' | ' + nm + (letter ? ' ' + letter : '') + (letter && SYN[st.id] ? ' | ' + SYN[st.id].split(' | ').map((x) => x + ' ' + letter).join(' | ') : '');
+          t += ' | ' + gjSyn(t);
+          this.index.push({ o: ref, cls: 'exo', t });
+        }
+      }
       this.filter = 'all';
       const pass = (it) => this.filter === 'all' || it.cls === this.filter || (this.filter === 'messier' && it.o.messier);
       const run = () => {
@@ -140,12 +174,19 @@
       sp.textContent = o.name;
       li.appendChild(sp);
       const sub = document.createElement('em');
-      sub.textContent = o.kind === 'star' ? (o.isSun ? 'G2V' : o.companion === true ? o.spec : (o.mag ?? 0).toFixed(1) + 'ᵐ') : o.kind === 'moon' ? 'спутник' : o.kind === 'probe' ? 'NASA' : (o.messier && o.ngc ? o.ngc : '');
+      sub.textContent = o.kind === 'exoref' ? 'экзопланета · ' + o.star.name : o.kind === 'star' ? (o.isSun ? 'G2V' : o.companion === true ? o.spec : (o.mag ?? 0).toFixed(1) + 'ᵐ') : o.kind === 'moon' ? 'спутник' : o.kind === 'probe' ? 'NASA' : (o.messier && o.ngc ? o.ngc : '');
       li.appendChild(sub);
       li.title = [o.desig, o.type, o.con && MW.conName(o.con)].filter(Boolean).join(' · ');
-      li.onclick = () => this.select(o);
-      li.ondblclick = () => { this.select(o); this.flyTo(o); };
+      li.onclick = () => this.select(this.resolve(o));
+      li.ondblclick = () => { const r = this.resolve(o); this.select(r); this.flyTo(r); };
       return li;
+    }
+    // ссылка из поиска на экзопланету → генерируем систему звезды и выбираем саму планету
+    resolve(o) {
+      if (!o || o.kind !== 'exoref') return o;
+      this.scene.activateStar(o.star, true);
+      const sys = this.scene.active;
+      return (sys && sys.bodies.find((b) => b.name === o.name)) || o.star;
     }
     objColor(o) {
       if (o.kind === 'star') return MW.color.hex(o.color);
@@ -195,6 +236,13 @@
       $('#cardFly').onclick = () => this.selected && this.flyTo(this.selected.obj);
       $('#cardFlyTop').onclick = () => this.selected && this.flyTo(this.selected.obj);
       $('#cardClose').onclick = () => this.select(null);
+      $('#cardLand').onclick = () => {
+        const o = this.selected && this.selected.obj, sf = this.app.surface;
+        if (!o) return;
+        if (sf.active && sf.body === o) sf.takeoff(); else sf.land(o);
+        this.updateLandBtn(o);
+      };
+      $('#surfUp').onclick = () => this.app.surface.takeoff();
       $('#tPause').onclick = () => this.togglePause();
       $('#tSlow').onclick = () => this.timeStep(-1);
       $('#tFast').onclick = () => this.timeStep(1);
@@ -250,6 +298,21 @@
       this.renderFacts(o);
       this.renderWhy(o);
       this.renderChips(o);
+      this.updateLandBtn(o);
+    }
+    // кнопка «Приземлиться» — у твёрдых планет и спутников; на поверхности этого тела — «Взлететь на орбиту»
+    updateLandBtn(o) {
+      const btn = $('#cardLand'), sf = this.app.surface;
+      if (!btn) return;
+      const ok = sf && o && sf.isLandable(o);
+      btn.classList.toggle('hidden', !ok);
+      if (ok) btn.textContent = sf.active && sf.body === o ? '🚀 Взлететь на орбиту' : '🛬 Приземлиться';
+      if (ok) sf.initGL(this.r);      // шейдеры ландшафта компилируются заранее, в фоне, пока читают карточку
+    }
+    onSurface(on) {
+      $('#surfHud').classList.toggle('hidden', !on);
+      document.body.classList.toggle('on-surface', on);
+      if (this.selected) this.updateLandBtn(this.selected.obj);
     }
     // блок «Почему так выглядит»: облик экзопланеты выведен из её реальных параметров
     renderWhy(o) {
@@ -500,6 +563,15 @@
             pinch.d = d;
             const cam = this.cam;
             cam.cancelAuto();
+            const sfc = this.app.surface;
+            if (sfc.active) {
+              // на поверхности: раздвинуть пальцы — шагать вперёд, сдвинуть оба — вбок / вверх-вниз
+              const pp = [...touches.values()], mx = (pp[0].x + pp[1].x) / 2, my = (pp[0].y + pp[1].y) / 2;
+              const W = Math.max(cv.clientWidth, 1);
+              sfc.touchMove(Math.log(r) * 4, -(mx - pinch.mx) / W * 3, (my - pinch.my) / W * 3);
+              pinch.mx = mx; pinch.my = my;
+              return;
+            }
             const D = Math.max(cam.dEff || 1e-9, 1e-12);
             const f = MW.util.clamp(1 - Math.pow(r, -3), -8, 0.9);
             cam.pos = v3.madd(cam.pos, cam.forward, D * f);
@@ -540,7 +612,7 @@
         if (down.touch) {
           cam.cancelAuto();
           // у планеты/звезды — облёт вокруг неё, иначе — поворот взгляда
-          if (!down.started) { down.started = true; down.mode = cam.anchor ? 'orbit' : 'look'; if (down.mode === 'orbit') { cam.pivot = this.orbitPivot(); cam.vel = [0, 0, 0]; } }
+          if (!down.started) { down.started = true; down.mode = cam.anchor && !this.app.surface.active ? 'orbit' : 'look'; if (down.mode === 'orbit') { cam.pivot = this.orbitPivot(); cam.vel = [0, 0, 0]; } }
           applyTouch(dx, dy, down.mode);
           const now = performance.now(), dts = Math.max((now - down.t) / 1000, 1e-3);
           down.t = now;
@@ -550,6 +622,12 @@
         if (down.b === 0) { cam.cancelAuto(); cam.mouseLook[0] += dx; cam.mouseLook[1] += dy; return; }
         if (down.b !== 1 && down.b !== 2) return;
         cam.cancelAuto();
+        if (this.app.surface.active) {
+          // на поверхности ПКМ — тоже осмотр, СКМ — шаг вбок / вверх
+          if (down.b === 2) { cam.mouseLook[0] += dx; cam.mouseLook[1] += dy; }
+          else this.app.surface.touchMove(0, -dx / Math.max(cv.clientWidth, 1) * 2, dy / Math.max(cv.clientWidth, 1) * 2);
+          return;
+        }
         // опорная точка выбирается один раз в начале перетаскивания
         if (!down.started) { down.started = true; cam.pivot = this.orbitPivot(); cam.vel = [0, 0, 0]; }
         if (down.b === 2) { cam.orbitDelta[0] += dx; cam.orbitDelta[1] += dy; }
@@ -714,6 +792,14 @@
       else if (v3.dist(cam.pos, sc.bh.pos) < 1) where = 'Окрестности Стрельца A*';
       else if (gcD > 70000 || Math.abs(cam.pos[2] - MW.C.GC_POS[2]) > 15000) where = gcD > 400000 ? 'Межгалактическое пространство' : 'Над диском Галактики';
       if (cam.auto) where = '⟫ Автопилот → ' + cam.auto.target.name;
+      const sf = this.app.surface;
+      if (sf && sf.active) {
+        where = '⛰ На поверхности: ' + sf.body.name;
+        const a = sf.alt || 0, el = sf.sunElev();
+        const st = sf.body.system.star;
+        $('#surfInfo').textContent = sf.body.name + ' · высота ' + (a < 1000 ? a.toFixed(a < 10 ? 1 : 0) + ' м' : (a / 1000).toFixed(a < 1e4 ? 2 : 0) + ' км') +
+          ' · ' + (st.isSun ? 'Солнце' : st.name) + ' ' + (el >= 0 ? '+' : '−') + Math.abs(el).toFixed(1) + '°' + (sf.descent ? ' · снижение…' : '');
+      }
       $('#hWhere').textContent = where;
       $('#hSpeed').textContent = U.fmtSpeed(cam.speed);
       $('#hThrottle').textContent = '×' + (cam.throttle >= 10 ? Math.round(cam.throttle) : cam.throttle.toPrecision(2));
@@ -736,6 +822,8 @@
       ctx.clearRect(0, 0, w, h);
       const r = this.r, cam = this.cam, sc = this.scene;
       this._labelHits = [];
+      const sfl = this.app.surface;
+      this._surfUp = sfl && sfl.active ? v3.norm(v3.sub(cam.pos, sfl.body.pos)) : null;
       const occ = [];
       const free = (x, y, wd) => { for (const o of occ) if (Math.abs(o[0] - x) < (o[2] + wd) / 2 + 4 && Math.abs(o[1] - y) < 13) return false; occ.push([x, y, wd]); return true; };
       const selName = this.selected ? this.selected.obj.name : null;
@@ -760,6 +848,8 @@
         const p = r.project(pos);
         if (!p || !p.onScreen) return null;
         if (occl.length && hidden(pos)) return null;
+        // на поверхности: объекты под местным горизонтом не подписываем
+        if (this._surfUp && v3.dot(v3.sub(pos, cam.pos), this._surfUp) < -0.01 * v3.dist(pos, cam.pos)) return null;
         ctx.font = (opts.bold ? '600 ' : '') + (opts.size || 12) + 'px "Segoe UI", system-ui, sans-serif';
         const tw = ctx.measureText(text).width;
         const ox = opts.center ? -tw / 2 : 8, oy = opts.center ? 4 : -6;
@@ -801,6 +891,7 @@
         if (dSys < 3000 * MW.C.AU_LY) {
           label(sys.star.name, sys.star.pos, '#ffe9a8', { bold: true, obj: sys.star });
           for (const b of sys.bodies) {
+            if (this.app.surface.active && b === this.app.surface.body) continue;
             if (b.kind === 'moon') { const dp = v3.dist(cam.pos, b.parentBody.pos); if (dp > b.parentBody.radius * 400) continue; }
             label(b.name, b.pos, b.kind === 'moon' ? '#a9b4c8' : '#cfe0ff', { size: b.kind === 'moon' ? 11 : 12, obj: b });
           }

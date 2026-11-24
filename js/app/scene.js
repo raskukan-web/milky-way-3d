@@ -156,6 +156,7 @@
       }
       for (const list of groups) {
         for (const b of list) {
+          if (b === this.surfaceBody) continue;     // на поверхности высоту над рельефом держит режим посадки
           const r = b.radius * (b.kind === 'star' ? 1.02 : 1.0015);
           const rel = v3.sub(cam.pos, b.pos);
           const d = v3.len(rel);

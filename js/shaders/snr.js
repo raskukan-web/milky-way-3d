@@ -78,8 +78,9 @@ vec4 snrMarch(vec3 ro, vec3 rd, float s, int typ, float jitter){
     if (t >= t1) break;
     vec3 e; float a;
     snrSample(ro + rd * t, s, typ, e, a);
-    col += T * e * dt;
-    T *= exp(-a * dt);
+    float nf = smoothstep(0.0, 0.12, t);          // у камеры плотность плавно → 0
+    col += T * e * dt * nf;
+    T *= exp(-a * dt * nf);
     if (T < 0.04) break;
     t += dt;
   }

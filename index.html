@@ -85,6 +85,7 @@
   <div id="cardFacts"></div>
   <div id="cardPlanets"></div>
   <button id="cardFly" class="primary">🚀 Лететь (Enter)</button>
+  <button id="cardLand" class="primary hidden">🛬 Приземлиться</button>
 </section>
 
 <section id="hud" class="glass">
@@ -92,6 +93,12 @@
   <div class="hrow"><span>Скорость</span><b id="hSpeed">—</b><span>тяга</span><b id="hThrottle">×1</b></div>
   <div class="hrow"><span>От Солнца</span><b id="hSun">—</b><span id="hGal"></span></div>
   <div class="hrow time"><button id="tSlow" title="Медленнее ([)">◀◀</button><button id="tPause" title="Пауза (P)">⏯</button><button id="tFast" title="Быстрее (])">▶▶</button><button id="tNow" title="Сейчас">сейчас</button><b id="hDate"></b><span id="hRate"></span><span id="hFps"></span></div>
+</section>
+
+<section id="surfHud" class="glass hidden">
+  <div id="surfInfo">—</div>
+  <div id="surfHint">WASD / стрелки — идти · мышь / палец — осмотр · R/F — выше/ниже · Shift — быстрее</div>
+  <button id="surfUp" class="primary">🚀 Взлететь на орбиту</button>
 </section>
 
 <div id="toast"></div>
@@ -120,6 +127,7 @@
 <script src="js/shaders/volumes.js"></script>
 <script src="js/shaders/probe.js"></script>
 <script src="js/shaders/deepsky.js"></script>
+<script src="js/shaders/surface.js"></script>
 <script src="js/world/solar.js"></script>
 <script src="js/world/probes.js"></script>
 <script src="js/world/cosmos.js"></script>
@@ -129,6 +137,7 @@
 <script src="js/app/camera.js"></script>
 <script src="js/app/scene.js"></script>
 <script src="js/app/renderer.js"></script>
+<script src="js/app/surface.js"></script>
 <script src="js/app/ui.js"></script>
 <script src="js/app/main.js"></script>
 </body>
