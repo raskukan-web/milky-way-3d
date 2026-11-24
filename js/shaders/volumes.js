@@ -424,7 +424,7 @@ void main(){
 in vec2 v_uv;
 uniform vec2 u_res;
 uniform int u_n;
-uniform vec4 u_src[16];      // x, y (px), z — яркость, w — поворот лучей
+uniform vec4 u_src[16];      // x, y (px), z — яркость, w — длина лучей (px при высоте кадра 1080)
 uniform vec3 u_scol[16];
 uniform float u_ghost;
 out vec4 o;
@@ -438,11 +438,11 @@ void main(){
     vec4 s = u_src[i];
     vec2 d = fc - s.xy;
     float I = s.z;
-    float L = (7.0 + 15.0 * log2(1.0 + I)) * u_res.y / 1080.0;
+    float L = max(s.w, 1.0) * u_res.y / 1080.0;
     if (dot(d, d) > L * L * 1.6) continue;
     vec3 acc = vec3(0.0);
     for (int k = 0; k < 4; k++){
-      float a = s.w + float(k) * 0.7853982;
+      float a = 0.32 + float(k) * 0.7853982;
       vec2 dir = vec2(cos(a), sin(a));
       float along = abs(dot(d, dir));
       float perp = abs(dot(d, vec2(-dir.y, dir.x)));

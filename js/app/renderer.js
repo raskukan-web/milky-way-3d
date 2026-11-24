@@ -897,9 +897,16 @@
         const prDisk = radius ? this.pxRadius(radius, L) : 0;
         const diskFade = 1 - MW.util.smoothstep(2.5, 22, prDisk);
         if (diskFade <= 0.01) return;
-        const I = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40) * diskFade;
+        // Длина и яркость лучей — от видимой звёздной величины на текущей дистанции (закон 1/r² → +5·lg r в m).
+        // x — на сколько звёздных величин источник ярче порога 1,3ᵐ: Сириус ~3, Солнце с Земли ~28, с орбиты
+        // Плутона ~20, от «Вояджеров» ~17, с 1 000 а. е. ~13. Рост квадратичный: у Земли лучи заметные, а за
+        // Плутоном и «Вояджерами» Солнце — компактная звезда, как Сириус с Земли.
+        const x = Math.max(0, 1.3 - m);
+        const len = (6 + 0.1 * x * x) * diskFade;          // px (при высоте кадра 1080)
+        const I = (0.3 + 0.012 * x * x) * diskFade;
+        const Iraw = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40) * diskFade;   // для автоэкспозиции
         const c = color || [1, 1, 1], mx = Math.max(c[0], c[1], c[2], 1e-3);
-        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I, col: c.map((x) => 0.5 * x / mx + 0.5) });
+        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I, len, mag: x, Iraw, col: c.map((v) => 0.5 * v / mx + 0.5) });
       };
       const RS = MW.C.RSUN_LY;
       for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag, sys.star.radius || (sys.star.radiusSun || 1) * RS);
@@ -916,16 +923,17 @@
     drawLensEffects(target) {
       if (this.s.lens === false) { this.lensPeak = 0; return; }
       const src = this.lensSources();
-      this.lensPeak = src.length ? src[0].I : 0;
+      this.lensPeak = src.length ? src[0].Iraw : 0;
       this.stats.lens = src.length;
       if (!src.length) return;
       const a = new Float32Array(64), c = new Float32Array(48);
-      src.forEach((o, i) => { a.set([o.x, o.y, o.I, 0.32], i * 4); c.set(o.col, i * 3); });
+      src.forEach((o, i) => { a.set([o.x, o.y, o.I, o.len], i * 4); c.set(o.col, i * 3); });
       const p = this.pFlare.use();
       p.set('u_res', [this.width, this.height]); p.set('u_n', src.length);
       p.set('u_src', a); p.set('u_scol', c);
       // блики объектива и анаморфная полоса — только от действительно ярких источников (Солнце, звезда рядом)
-      p.set('u_ghost', MW.util.clamp((src[0].I - 3) / 25, 0, 1) * 0.25);
+      // блики объектива — только от очень яркого источника (Солнце не дальше ~орбиты Сатурна)
+      p.set('u_ghost', MW.util.clamp((src[0].mag - 20) / 6, 0, 1) * 0.25);
       this.glc.bindTarget(target);
       this.glc.blendAdd();
       this.glc.fullscreen();
