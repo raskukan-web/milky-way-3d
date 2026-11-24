@@ -818,18 +818,34 @@ vec3 albedoP(vec3 n, float h, out float spec, out vec3 emis){
 #endif
 #if FAM == 1
   if (u_type == 15){
-    // лавовый мир: тёмная базальтовая кора, светящиеся реки и трещины, магматический океан под звездой
+    // Лавовый мир (атмосфера сдута): тёмные базальтовые плиты, рваные ветвящиеся разломы с расплавом разной
+    // толщины и остывающей тёмно-багровой коркой по краям, озеро магмы в подсолнечной точке (размер — по Tэкв).
+    // Координаты разломов искажены двухуровневым турбулентным шумом — никакой «плитки» Вороного.
     float glow = max(u_exo.y, 0.6);
-    float rv = lrv;
-    float riv = smoothstep(0.82, 0.97, rv);
-    vec2 wc = worley(n * 7.0 + SP);
-    float crack = 1.0 - smoothstep(0.0, 0.05, wc.y - wc.x);
-    float sub = smoothstep(0.55, 0.95, dot(n, gL) + 0.25 * fbm(n * 4.0 + SP, 3)) * clamp(u_exo.y - 0.3, 0.0, 1.0);
+    float sub = dot(n, gL);
+    vec3 w1 = vec3(fbm(n * 3.0 + SP, 4), fbm(n * 3.0 + SP.yzx + 4.1, 4), fbm(n * 3.0 + SP.zxy + 8.3, 4));
+    vec3 q = n * 2.4 + 0.9 * w1;
+    vec3 w2 = vec3(fbm(q * 1.7 + SP, 3), fbm(q * 1.7 + SP + 2.3, 3), fbm(q * 1.7 + SP + 5.7, 3));
+    q += 0.6 * w2;
+    float rid = clamp(ridged(q + SP, 3) * 1.25, 0.0, 1.0);   // сумма ridged < 1 — растягиваем до гребней ~1
+    float width = 0.05 + 0.07 * (fbm(n * 2.0 + SP + 13.0, 3) * 0.5 + 0.5);    // толщина разломов меняется
+    float fis = smoothstep(1.0 - width, 1.0 - width * 0.25, rid);               // раскалённая сердцевина
+    float cool = smoothstep(1.0 - width * 3.2, 1.0 - width, rid) * (1.0 - fis); // остывающая корка вдоль разлома
+    float riv = smoothstep(0.84, 0.97, lrv);
+    // озеро магмы под звездой: рваный берег, чем горячее планета — тем больше
+    float lakeR = 0.975 - 0.035 * clamp(u_exo.y - 0.4, 0.0, 1.0);
+    float lk = sub + 0.045 * fbm(n * 6.0 + SP + 3.0, 4) + 0.02 * w1.x;
+    float lake = smoothstep(lakeR - 0.012, lakeR + 0.012, lk);
+    // плавучие плиты остывшей корки на поверхности озера
+    float raft = smoothstep(0.05, 0.35, fbm(n * 14.0 + SP + vec3(u_time * 0.004), 4)) * (1.0 - smoothstep(0.985, 1.0, sub));
+    float shore = smoothstep(lakeR - 0.12, lakeR, lk) * (1.0 - lake);
+    vec3 basalt = mix(vec3(0.03, 0.028, 0.027), vec3(0.11, 0.095, 0.085), smoothstep(-0.3, 0.5, h));
+    basalt = mix(basalt, vec3(0.19, 0.055, 0.03), clamp(cool * 0.8 + shore * 0.6, 0.0, 1.0));
     float flick = 0.85 + 0.15 * fbm(n * 20.0 + vec3(u_time * 0.05), 2);
-    emis = (vec3(1.0, 0.36, 0.06) * (riv * 2.6 + crack * 0.8) * glow + vec3(1.0, 0.6, 0.16) * sub * 2.4) * flick;
-    vec3 crust = mix(vec3(0.04, 0.036, 0.035), vec3(0.17, 0.14, 0.12), smoothstep(-0.3, 0.5, h));
-    crust = mix(crust, vec3(0.32, 0.12, 0.05), smoothstep(0.7, 0.82, rv) * 0.7);
-    return mix(crust, vec3(0.35, 0.12, 0.05), sub);
+    // яркость расплава ниже порога bloom: трещины и озеро светятся насыщенно-оранжевым, без белого пересвета
+    emis = (vec3(1.0, 0.3, 0.05) * (fis * 1.6 + riv * 0.25) + vec3(0.55, 0.09, 0.03) * cool * 0.3) * glow * flick
+         + vec3(1.0, 0.32, 0.06) * lake * (1.0 - 0.85 * raft) * (0.16 + 0.14 * (fbm(n * 9.0 + vec3(u_time * 0.03), 3) * 0.5 + 0.5)) * glow;
+    return mix(basalt, mix(vec3(0.2, 0.055, 0.025), vec3(0.06, 0.035, 0.03), raft), lake);
   }
 #endif
 #if FAM == 1
