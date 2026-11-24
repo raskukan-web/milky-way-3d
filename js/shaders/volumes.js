@@ -438,7 +438,7 @@ void main(){
     vec4 s = u_src[i];
     vec2 d = fc - s.xy;
     float I = s.z;
-    float L = (16.0 + 34.0 * log2(1.0 + I)) * u_res.y / 1080.0;
+    float L = (7.0 + 15.0 * log2(1.0 + I)) * u_res.y / 1080.0;
     if (dot(d, d) > L * L * 1.6) continue;
     vec3 acc = vec3(0.0);
     for (int k = 0; k < 4; k++){
@@ -446,7 +446,7 @@ void main(){
       vec2 dir = vec2(cos(a), sin(a));
       float along = abs(dot(d, dir));
       float perp = abs(dot(d, vec2(-dir.y, dir.x)));
-      float w = 0.5 + 0.7 * along / L;
+      float w = 0.32 + 0.3 * along / L;
       float core = exp(-perp * perp / (w * w));
       vec3 len = L * vec3(1.0, 0.88, 0.76) * (k == 0 || k == 2 ? 1.0 : 0.5);
       vec3 fall = exp(-along / (len * 0.3));
@@ -459,6 +459,7 @@ void main(){
     vec2 p0 = u_src[0].xy, c = u_res * 0.5;
     vec2 axis = c - p0;
     float sc = u_res.y;
+    float offK = smoothstep(0.08, 0.3, length(axis) / sc);   // источник у центра кадра: без концентрических колец
     for (int j = 0; j < 6; j++){
       float t = j == 0 ? 0.55 : j == 1 ? 1.15 : j == 2 ? 1.42 : j == 3 ? 1.78 : j == 4 ? 2.1 : 2.6;
       float rad = (j == 0 ? 0.03 : j == 1 ? 0.055 : j == 2 ? 0.016 : j == 3 ? 0.085 : j == 4 ? 0.04 : 0.13) * sc;
@@ -468,7 +469,7 @@ void main(){
       float disc = smoothstep(1.0, 0.75, rr) * 0.1;
       float rim = exp(-pow((rr - 0.95) / 0.06, 2.0)) * 0.22;
       vec3 gc = mix(vec3(0.6, 0.8, 1.0), spectrum(rr * 0.9 + float(j) * 0.17), 0.45);
-      col += gc * (disc + rim) * u_ghost * (j == 5 ? 0.35 : 1.0);
+      col += gc * (disc + rim) * u_ghost * offK * (j == 5 ? 0.35 : 1.0);
     }
     // анаморфная полоса через источник
     vec2 d0 = fc - p0;

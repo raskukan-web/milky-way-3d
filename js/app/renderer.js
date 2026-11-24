@@ -883,22 +883,27 @@
         if (this.pxRadius(b.radius, d) > 1.5) occl.push({ rel, d, r2: b.radius * b.radius });
       }
       const hidden = (rel, L) => { for (const o of occl) { if (o.d >= L) continue; const t = v3.dot(o.rel, rel) / L; if (t > 0 && o.d * o.d - t * t < o.r2) return true; } return false; };
-      const add = (pos, color, absMag) => {
+      const add = (pos, color, absMag, radius) => {
         if (absMag === undefined || absMag === null) return;
         const rel = v3.sub(pos, cam.pos), L = v3.len(rel);
         const m = absMag + 5 * Math.log10(Math.max(L, 1e-12) / 32.6156);
         if (m > 1.3) return;
         const pp = this.project(pos);
         if (!pp || !pp.onScreen || hidden(rel, L)) return;
-        const I = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40);
+        // когда звезда видна диском (3D-шар), лучи плавно гаснут: оптика «точечного» источника не рисуется поверх фотосферы
+        const prDisk = radius ? this.pxRadius(radius, L) : 0;
+        const diskFade = 1 - MW.util.smoothstep(2.5, 22, prDisk);
+        if (diskFade <= 0.01) return;
+        const I = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40) * diskFade;
         const c = color || [1, 1, 1], mx = Math.max(c[0], c[1], c[2], 1e-3);
         out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I, col: c.map((x) => 0.5 * x / mx + 0.5) });
       };
-      for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag);
-      for (const st of this.scene.catalog.stars) if (!st.isSun) add(st.pos, st.color, st.absMag);
+      const RS = MW.C.RSUN_LY;
+      for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag, sys.star.radius || (sys.star.radiusSun || 1) * RS);
+      for (const st of this.scene.catalog.stars) if (!st.isSun) add(st.pos, st.color, st.absMag, (st.radiusSun || 1) * RS);
       if (!this._brightHyg) this._brightHyg = this.scene.catalog.hygStars.filter((s) => s.absMag < 2.5 || s.proper);
-      for (const st of this._brightHyg) add(st.pos, st.color, st.absMag);
-      for (const c of MW.catalog.binaries) add(c.pos, c.color, c.absMag);
+      for (const st of this._brightHyg) add(st.pos, st.color, st.absMag, (st.radiusSun || 1) * RS);
+      for (const c of MW.catalog.binaries) add(c.pos, c.color, c.absMag, c.radius);
       // одна и та же звезда может быть в двух каталогах — убираем дубли по экранной позиции
       out.sort((a, b) => b.I - a.I);
       const res = [];
@@ -917,7 +922,7 @@
       p.set('u_res', [this.width, this.height]); p.set('u_n', src.length);
       p.set('u_src', a); p.set('u_scol', c);
       // блики объектива и анаморфная полоса — только от действительно ярких источников (Солнце, звезда рядом)
-      p.set('u_ghost', MW.util.clamp((src[0].I - 3) / 25, 0, 1) * 0.35);
+      p.set('u_ghost', MW.util.clamp((src[0].I - 3) / 25, 0, 1) * 0.25);
       this.glc.bindTarget(target);
       this.glc.blendAdd();
       this.glc.fullscreen();
