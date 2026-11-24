@@ -276,8 +276,12 @@
       };
       const out = [];
       this.dsoList = [];
+      const BOOST = new Set(['m31', 'm33', 'm81', 'm82', 'ngc0253', 'ngc5128', 'm101', 'm51', 'm104']);
       for (const o of cat.dsos) {
-        if (!o.ext || dedicated.has(o)) continue;
+        // ключевые галактики, нарисованные частицами (M31, M33, M81, M82, M51…), издали подхватывает дубль
+        // в общем буфере с объёмным балджем и гало (иначе они сжимаются в тусклую точку)
+        const farOnly = BOOST.has(o.id) && dedicated.has(o);
+        if (!farOnly && (!o.ext || dedicated.has(o))) continue;
         const cls = clsOf(o);
         if (cls < 0) continue;
         const h = MW.rng.mulberry32(MW.rng.hashStr(o.id));
@@ -291,7 +295,7 @@
         const snrTyp = cls !== 4 ? 0 : /^(m1|crab)/.test(o.id) || /Краб/.test(o.name) ? 2
           : /kepler|tycho|casa|cas_a|sn1987|sn1006|g1\.9/i.test(o.id) || /Кеплер|Тихо|Кассиопея|1987|1006/.test(o.name) ? 0 : 1;
         out.push(hi[0], hi[1], hi[2], p[0] - hi[0], p[1] - hi[1], p[2] - hi[2], nrm[0], nrm[1], nrm[2], col[0], col[1], col[2],
-          Math.max(o.radius, 1e-4), cls, snrTyp * 10 + h() + (o.est ? 100 : 0), absM);
+          Math.max(o.radius, 1e-4), cls, snrTyp * 10 + h() + 100 * ((o.est ? 1 : 0) + (BOOST.has(o.id) ? 2 : 0) + (farOnly ? 4 : 0)), absM);
         this.dsoList.push(o);
       }
       this.dsoBuf = this.glc.instanced(f32(out), [[1, 3], [2, 3], [3, 3], [4, 3], [5, 4]]);
@@ -742,7 +746,7 @@
       // переход от каталога к процедурной структуре без скачка. Сферы реликтового излучения нет: за горизонтом
       // (46,5 млрд св. лет) — чёрный космос; дальние объекты гаснут туманом по расстоянию от камеры.
       // ближний слой паутины проявляется сразу за Местной группой (15 млн св. лет) — без чёрной пустоты вокруг OpenNGC
-      const webK = U.smoothstep(0, 1, Math.log(Math.max(sunD, 1) / 1.5e7) / Math.log(1.2e8 / 1.5e7));
+      const webK = Math.sqrt(U.smoothstep(0, 1, Math.log(Math.max(sunD, 1) / 5e5) / Math.log(2e7 / 5e5)));
       if (webK > 0.01) {
         // яркость растёт с расстоянием: издали видна вся сеть, а не отдельные точки
         const gain = webK * (0.22 + 0.43 * U.smoothstep(1.5e9, 4e9, sunD) + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
@@ -985,9 +989,11 @@
         if (this.pxRadius(b.radius, d) > 1.5) occl.push({ rel, d, r2: b.radius * b.radius });
       }
       const hidden = (rel, L) => { for (const o of occl) { if (o.d >= L) continue; const t = v3.dot(o.rel, rel) / L; if (t > 0 && o.d * o.d - t * t < o.r2) return true; } return false; };
-      const add = (pos, color, absMag, radius) => {
+      const add = (pos, color, absMag, radius, sys) => {
         if (absMag === undefined || absMag === null) return;
         const rel = v3.sub(pos, cam.pos), L = v3.len(rel);
+        // позади камеры — никаких лучей (проекция у самой плоскости камеры даёт «выстрел» через весь экран)
+        if (v3.dot(rel, cam.forward) <= L * 0.02) return;
         const m = absMag + 5 * Math.log10(Math.max(L, 1e-12) / 32.6156);
         if (m > 1.3) return;
         const pp = this.project(pos);
@@ -1000,7 +1006,11 @@
         // x — на сколько звёздных величин источник ярче порога 1,3ᵐ: Сириус ~3, Солнце с Земли ~28, с орбиты
         // Плутона ~20, от «Вояджеров» ~17, с 1 000 а. е. ~13. Рост квадратичный: у Земли лучи заметные, а за
         // Плутоном и «Вояджерами» Солнце — компактная звезда, как Сириус с Земли.
-        const x = Math.max(0, 1.3 - m);
+        // звёзды поля, пролетающие вплотную к объективу при быстром полёте: лучи плавно гаснут и ограничены по длине
+        // (иначе на 1–2 кадра через экран «стреляли» белые полосы)
+        let diskFadeNear = 1;
+        let x = Math.max(0, 1.3 - m);
+        if (!sys) { x = Math.min(x, 12); diskFadeNear = MW.util.smoothstep(0.003, 0.03, L); if (diskFadeNear < 0.01) return; }
         const len = (6 + 0.1 * x * x) * diskFade;          // px (при высоте кадра 1080)
         const I = (0.3 + 0.012 * x * x) * diskFade;
         let Iraw = Math.min(Math.pow(10, -0.4 * (m - 1.0)), 40) * diskFade;   // для автоэкспозиции
@@ -1015,10 +1025,10 @@
         if (tK < 0.02) return;
         Iraw *= tK;
         const c = color || [1, 1, 1], mx = Math.max(c[0], c[1], c[2], 1e-3);
-        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I: I * tK, len: len * Math.sqrt(tK), mag: x, Iraw, col: c.map((v) => 0.5 * v / mx + 0.5) });
+        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I: I * tK * diskFadeNear, len: len * Math.sqrt(tK) * (0.4 + 0.6 * diskFadeNear), mag: x, Iraw, sys: !!sys, col: c.map((v) => 0.5 * v / mx + 0.5) });
       };
       const RS = MW.C.RSUN_LY;
-      for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag, sys.star.radius || (sys.star.radiusSun || 1) * RS);
+      for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag, sys.star.radius || (sys.star.radiusSun || 1) * RS, true);
       for (const st of this.scene.catalog.stars) if (!st.isSun) add(st.pos, st.color, st.absMag, (st.radiusSun || 1) * RS);
       if (!this._brightHyg) this._brightHyg = this.scene.catalog.hygStars.filter((s) => s.absMag < 2.5 || s.proper);
       for (const st of this._brightHyg) add(st.pos, st.color, st.absMag, (st.radiusSun || 1) * RS);
@@ -1042,7 +1052,11 @@
       p.set('u_src', a); p.set('u_scol', c);
       // блики объектива и анаморфная полоса — только от действительно ярких источников (Солнце, звезда рядом)
       // блики объектива — только от очень яркого источника (Солнце не дальше ~орбиты Сатурна)
-      p.set('u_ghost', MW.util.clamp((src[0].mag - 20) / 6, 0, 1) * 0.25 * (this.surface && this.surface.active && this.surface.prof.atm ? 0.12 : 1));
+      const gT = src[0].sys ? MW.util.clamp((src[0].mag - 20) / 6, 0, 1) * 0.25 * (this.surface && this.surface.active && this.surface.prof.atm ? 0.12 : 1) : 0;
+      const now = performance.now(), gdt = Math.min(0.25, ((now - (this._gT || now)) / 1000) || 0.016);
+      this._gT = now;
+      this._ghost = (this._ghost || 0) + (gT - (this._ghost || 0)) * (1 - Math.exp(-gdt / 0.3));
+      p.set('u_ghost', this._ghost);
       this.glc.bindTarget(target);
       this.glc.blendAdd();
       this.glc.fullscreen();

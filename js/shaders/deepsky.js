@@ -35,23 +35,33 @@ flat out vec4 v_par;
 flat out float v_I;
 flat out float v_pr;
 flat out float v_fade;
+flat out float v_boost;
 void main(){
   vec3 rel = (a_hi - u_camHi) + (a_lo - u_camLo);
   float D = max(length(rel), 1e-30);
   float R = a_par.x;
+  // флаги в сиде (сотни): 1 — оценочное расстояние, 2 — ближняя «ориентирная» галактика, 4 — дубль частичной модели (M31, M33)
+  float fl = floor(a_par.z / 100.0);
+  float est = mod(fl, 2.0), boost = mod(floor(fl / 2.0), 2.0), farOnly = floor(fl / 4.0);
+  // Ближние ключевые галактики (M31, M33, M81, M82, NGC 253, Центавр A, M101, M51, M104) на 0,3 – 40 млн св. лет —
+  // крупнее и ярче (объёмный балдж и мягкое гало), чтобы вылет из Млечного Пути не превращал их в 2-пиксельные точки
+  float bk = boost * smoothstep(2e5, 1.5e6, D) * (1.0 - smoothstep(4e7, 9e7, D));
+  R *= 1.0 + 0.7 * bk;
+  v_boost = bk;
   // фон, занимающий больше ~2° неба, при фокусе на близкой планете рисуется меньше (не «нависает» над ней)
   R *= 1.0 - u_bgShrink * 0.6 * smoothstep(0.03, 0.15, R / D);
   float pr = atan(R / D) * u_pxPerRad;
   float m = a_par.w + 5.0 * log2(D / 32.6156) * 0.30103;
-  float I = clamp(exp2(-1.3287712 * (m - u_magLim)), 0.0, 4.0);
+  float I = clamp(exp2(-1.3287712 * (m - u_magLim)) * (1.0 + 2.0 * bk), 0.0, 4.0);
   // объекты с оценочным расстоянием (+100 в сиде): их 3D-положение условно — из всех таких объектов на одном
   // «типовом» расстоянии (4 000 св. лет и т. п.) получалась бы сферическая оболочка — «мыльный пузырь» или кольцо
   // при взгляде на Галактику со стороны. Они видны, пока камера рядом с Солнцем, и гаснут при удалении.
-  float est = step(99.5, a_par.z);
   float distS = length(a_hi + a_lo), camS = length(u_camHi + u_camLo);
   v_fade = est > 0.5 ? 1.0 - smoothstep(distS * 0.08, distS * 0.3, camS) : 1.0;
+  // дубль галактики-частиц (M31, M33, M81…): проявляется, когда модель из частиц сжимается в точку
+  if (farOnly > 0.5) v_fade *= smoothstep(a_par.x * 25.0, a_par.x * 60.0, D);
   if (v_fade < 0.003){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-  v_rel = rel; v_nrm = a_nrm; v_col = a_col; v_par = vec4(R, a_par.y, a_par.z - est * 100.0, a_par.w); v_I = I; v_pr = pr;
+  v_rel = rel; v_nrm = a_nrm; v_col = a_col; v_par = vec4(R, a_par.y, a_par.z - fl * 100.0, a_par.w); v_I = I; v_pr = pr;
   // далёкие тусклые точки не рисуем
   if (pr < 2.0 && I < 0.003){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec4 pv = u_view * vec4(rel, 1.0);
@@ -79,6 +89,7 @@ flat in vec4 v_par;
 flat in float v_I;
 flat in float v_pr;
 flat in float v_fade;
+flat in float v_boost;
 uniform float u_time, u_bright, u_scale;
 out vec4 o;
 float h1(float x){ return fract(sin(x * 91.17 + v_par.z * 413.3) * 43758.5453); }
@@ -144,7 +155,9 @@ void main(){
         col = dc * disk * (0.3 + 1.1 * arm) * (1.0 - 0.55 * dust) * thick + vec3(0.55, 0.7, 1.0) * knots * disk * 0.8;
         col *= mix(1.0, 1.0 - 0.6 * exp(-pow(hgt / 0.012, 2.0)), edge);    // пылевая полоса вдоль диска с ребра
         float bul = exp(-pow(b / 0.09, 1.2));
-        col += vec3(1.0, 0.8, 0.55) * bul * 1.4;
+        col += vec3(1.0, 0.8, 0.55) * bul * 1.4 * (1.0 + 0.6 * v_boost);
+        // мягкое звёздное гало ориентирных галактик (к краю спрайта плавно → 0: без «квадрата»)
+        col += vec3(0.95, 0.88, 0.78) * exp(-b / 0.3) * 0.05 * v_boost * smoothstep(1.0, 0.6, b);
       } else if (cls == 1){
         // эллиптическая: эллипсоид (сжат вдоль оси), закон де Вокулёра
         vec3 q = cp - N * dot(cp, N) * 0.6;
@@ -254,6 +267,8 @@ void main(){
     // камера у самого ядра (активное ядро галактики/квазара): «точечное» ядро и центральный профиль родительской
     // галактики не растягиваются на весь экран — там работает шейдер чёрной дыры
     if (cls <= 2 || cls == 11 || cls == 14) col *= smoothstep(2e-5, 6e-4, length(C) / R);
+    // ориентирные галактики: мягкий предел яркости и плавный край (спрайт не пересвечивается в белое пятно)
+    if (v_boost > 0.0 && cls <= 2){ col *= smoothstep(1.05, 0.8, b); col /= 1.0 + max(max(col.r, col.g), col.b) * 0.5 * v_boost; }
     col *= u_bright * detail;
   }
   // издали — точка: блеск по видимой величине (сохраняет поток при переходе)
