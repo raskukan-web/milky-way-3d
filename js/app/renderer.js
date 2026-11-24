@@ -553,6 +553,23 @@
     // плавное появление карты поверх процедурной поверхности (без «щелчка»)
     texFade(e) { return e ? MW.util.smoothstep(0, 600, performance.now() - e.ready) : 0; }
 
+    /* Карта альбедо тела 512×256 (тот же шейдер, что с орбиты, в режиме пробы): палитра, биомы, реальная карта —
+       цвет грунта при посадке совпадает с видом с орбиты. */
+    albedoMap(b) {
+      const gl = this.gl;
+      if (!this._albT) this._albT = this.glc.target(512, 256, {});
+      const tC = this.texGet(b.tex, true);
+      const key = b.id + ':' + (tC && this.texFade(tC) > 0.99 ? 1 : 0);
+      if (this._albKey !== key) {
+        this._albKey = key;
+        const rel = v3.sub(b.pos, this.cam.pos), D = v3.len(rel);
+        this.glc.bindTarget(this._albT);
+        this._probe = true;
+        this.drawPlanet(b, D, rel);
+        this._probe = false;
+      }
+      return this._albT.tex;
+    }
     drawPlanet(b, D, rel) {
       const st = b.system.star;
       const td = TYPE_DEFAULTS[b.type] || {};
@@ -590,6 +607,7 @@
       p.set('u_crater', b._crater ?? (b._crater = MW.craterFactor(b)));
       // полярное сжатие быстро вращающихся гигантов (IAU): Сатурн 0,098, Юпитер 0,065, Уран 0,023, Нептун 0,017
       p.set('u_flat', { saturn: 0.098, jupiter: 0.0649, uranus: 0.0229, neptune: 0.0171 }[b.id] || 0);
+      p.set('u_probe', this._probe ? 1 : 0);
       // размер пикселя на поверхности (в долях радиуса): у самой поверхности угловой размер планеты
       // почти не растёт, а детализация должна — поэтому микрорельеф и шаг бампа считаются по нему
       const foot = Math.max(D - R, R * 1e-6) / (this.pxPerRad * R);
@@ -630,7 +648,13 @@
       }
       // дымка атмосферы над диском: у плотных атмосфер (Венера, Титан) — вся, у Земли — лёгкая, у остальных — только на лимбе
       p.set('u_hazeFloor', b.hazeFloor !== undefined ? b.hazeFloor : b.type === 1 || b.type === 11 ? 1.0 : b.type === 2 ? 0.3 : b.type === 3 ? 0.25 : 0.06);
-      this.glc.blendPremul();
+      if (this._probe) {
+        // проба альбедо: на весь таргет, без микрорельефа, мип-уровень карты под 512 текселей
+        p.set('u_full', 1); p.set('u_res', [512, 256]); p.set('u_micro', 0); p.set('u_detail', f32([0, 0]));
+        p.set('u_texP', f32([kC, tC ? Math.max(0, Math.log2(tC.w / 512)) : 0, b.texH || 0, this.texFade(tA)]));
+        p.set('u_oct', 6);
+        this.glc.noBlend();
+      } else this.glc.blendPremul();
       this.gl.bindVertexArray(this.quadVAO || (this.quadVAO = this.glc.vao([], true)));
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     }
@@ -671,10 +695,11 @@
       // Её внутренний край размыт и перекрывается с реальными галактиками OpenNGC, палитра у них общая —
       // переход от каталога к процедурной структуре без скачка. Сферы реликтового излучения нет: за горизонтом
       // (46,5 млрд св. лет) — чёрный космос; дальние объекты гаснут туманом по расстоянию от камеры.
-      const webK = U.smoothstep(2e7, 5e8, sunD);
+      // ближний слой паутины проявляется сразу за Местной группой (15 млн св. лет) — без чёрной пустоты вокруг OpenNGC
+      const webK = U.smoothstep(0, 1, Math.log(Math.max(sunD, 1) / 1.5e7) / Math.log(1.2e8 / 1.5e7));
       if (webK > 0.01) {
         // яркость растёт с расстоянием: издали видна вся сеть, а не отдельные точки
-        const gain = webK * (0.55 + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
+        const gain = webK * (0.4 + 0.25 * U.smoothstep(1.2e8, 1e9, sunD) + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
         const fog = [1.8e10, 8e10];
         this.drawParticles(this.webBuf, [0, 0, 0], null, 0.9 * gain, 2.0, false, false, fog);
         this.drawParticles(this.qsoBuf, [0, 0, 0], null, 1.6 * gain, 2.0, false, false, fog);
@@ -734,12 +759,16 @@
       // 1. небесная сфера
       this.glc.noBlend();
       const sky = this.common(this.pSky);
-      sky.set('u_skyFade', 1 - MW.util.smoothstep(400, 5000, sunD));
+      // Вход и выход из Млечного Пути: панорама ESO (снята с Земли) и 3D-модель перетекают друг в друга по гладкой
+      // кривой Эрмита в логарифме расстояния на всём диапазоне 1 200 – 22 000 св. лет — без скачков яркости.
+      const logS = (a, b, x) => MW.util.smoothstep(0, 1, Math.log(Math.max(x, 1e-9) / a) / Math.log(b / a));
+      const inK = 1 - logS(1200, 22000, sunD);
+      sky.set('u_skyFade', inK);
       sky.set('u_grid', this.s.grid && sunD < 3000 ? 1 : 0);
       sky.set('u_pixAng', (2 * this.tanHalf) / this.height);
       sky.set('u_starField', 1); sky.set('u_art', this.s.artistic ? 1 : 0);
       // плавный cross-fade панорамы: снята с Земли, поэтому растворяется на 3–5 тыс. св. лет от Солнца
-      const panoK = this.panoTex && this.s.panorama ? 1 - MW.util.smoothstep(3000, 5000, sunD) : 0;
+      const panoK = this.panoTex && this.s.panorama ? inK : 0;
       this.panoK = panoK;
       sky.set('u_panoK', panoK); sky.set('u_panoGain', this.s.panoGain);
       if (this.panoTex) sky.tex('u_pano', this.panoTex);
@@ -775,7 +804,10 @@
       }
       for (const c of this.clusters) if (c.glow) this.drawParticles(c.glow, c.obj.pos, null, 0.08 * this.s.galaxyBright, 3.0, false);
       // снаружи (вид на диск) пылевые прожилки контрастнее: они «прорезают» звёздные поля, как на снимках «Хаббла»
-      this.drawParticles(this.mwDust, MW.C.GC_POS, null, 0.4 * (1 - 0.45 * inside) * (1 + 0.6 * outside) * (art ? 1.9 : 1.0) * (1 - 0.85 * panoK), 7.0, true);
+      // поглощение 3D-пыли — пропорционально весу самой 3D-модели (иначе в зоне перехода пыль «проедала» чёрное
+      // пятно в центре Галактики поверх светлой панорамы)
+      const w3 = 1 - 0.9 * panoK;
+      this.drawParticles(this.mwDust, MW.C.GC_POS, null, 0.4 * (1 - 0.45 * inside) * (1 + 0.6 * outside) * (art ? 1.9 : 1.0) * w3 * w3, 7.0, true);
       for (const g of this.extGal) if (g.dust) this.drawParticles(g.dust, g.obj.pos, g.model, 0.5, 6.0, true);
 
       // «фокус» на близком теле (планета, спутник, аппарат крупно в кадре): протяжённый фон уменьшается

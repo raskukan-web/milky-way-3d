@@ -236,7 +236,8 @@ uniform vec3 u_pole, u_sunDir, u_sunCol;
 uniform int u_type, u_oct;
 uniform float u_seed, u_time, u_bumpK, u_bumpEps, u_ambient, u_cloudRot, u_earthLod, u_micro, u_foot;
 uniform float u_crater;   // сохранность ударных кратеров 0…1 (планетология: атмосфера, вулканизм, молодой лёд их стирают)
-uniform float u_flat;     // полярное сжатие (Сатурн 0,098, Юпитер 0,065): тело — эллипсоид вращения
+uniform float u_flat;
+uniform float u_probe;    // 1 — «карта альбедо»: в каждый тексель — тот же цвет поверхности, что видно с орбиты (для посадки)     // полярное сжатие (Сатурн 0,098, Юпитер 0,065): тело — эллипсоид вращения
 vec3 gHitP;               // точка поверхности относительно центра (для тени колец)
 // растяжение вдоль полярной оси: в этом пространстве сплюснутое тело — сфера радиуса u_r
 vec3 oblS(vec3 v){ return v + (1.0 / (1.0 - u_flat) - 1.0) * dot(v, u_pole) * u_pole; }
@@ -1055,6 +1056,7 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
       cloudSh = 1.0 - 0.7 * smoothstep(0.012, 0.1, lum[3] - lum[0]) * (1.0 - smoothstep(0.05, 0.55, sinE));
     }
   }
+  if (u_probe > 0.5) return alb;
   float ndl = dot(N, Ll), ndlS = dot(n, Ll);
   float ndv = max(dot(n, V), 0.0);
   float diff = max(ndl, 0.0);
@@ -1156,14 +1158,24 @@ void main(){
   float limbF = 1.0;   // доля атмосферной дымки над диском (у экзопланет — только у лимба)
   float aa = max(fwidth(x), 1e-5);
   if (tc > 0.0) cover = 1.0 - smoothstep(1.0 - aa, 1.0, x);
-  if (cover > 0.0){
+  bool probe = u_probe > 0.5;
+  if (cover > 0.0 || probe){
     float xs = min(x, 0.99999);
     float zz = sqrt(1.0 - xs * xs);
     tP = (tc - zz * u_r) / mS;
     vec3 nS = (cpv - rdN * zz * u_r) / u_r;
     vec3 nHit = normalize(oblS(nS));          // нормаль эллипсоида
-    gHitP = rd * tP - u_c;
+    if (probe){
+      // тексель равнопромежуточной карты (как eqUV) → направление в системе тела → в мировой системе
+      vec2 uv = gl_FragCoord.xy / u_res;
+      float lon = (uv.x - 0.5) * 6.2831853, lat = (0.5 - uv.y) * 3.14159265;
+      nHit = transpose(u_bodyRot) * vec3(cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat));
+      rd = -nHit;
+    }
+    gHitP = nHit * u_r;
+    if (!probe) gHitP = rd * tP - u_c;
     pc = shadePlanet(nHit, rd, L);
+    if (probe){ o = vec4(pc, 1.0); return; }
     // Френель: в центре диска дымка почти не видна (облака не «выжигаются»), к краю — плотный ободок
     limbF = mix(u_hazeFloor, 1.0, pow(1.0 - max(dot(nHit, -rd), 0.0), 3.0));
   }
@@ -1205,15 +1217,33 @@ void main(){
     float den = max(1.0 - bb * bb, 1e-4);
     float tq = (bb * ee - dd) / den, sq = (ee - bb * dd) / den;
     if (tq > 0.0 && sq > 0.0){
-      float dist = length(w0 + rd * tq - A * sq) / u_r;
-      float s = sq / u_r;
-      float wdt = 0.9 + 0.28 * s;
-      float nz = fbm(vec3(s * 0.6 - u_time * 0.15, dist * 1.5, 0.0) + SP, 4);
-      float dens = exp(-pow(dist / wdt, 2.0)) * smoothstep(0.6, 2.2, s) * exp(-s / u_exo.z) * (0.55 + 0.6 * nz);
-      float occl = (cover > 0.0 && tq > tP) ? 0.0 : 1.0;
-      float k = dens * occl * 0.3 * min(inversesqrt(den), 4.0) / sqrt(wdt);
-      vec3 tcol = mix(vec3(1.0, 0.55, 0.3), vec3(0.55, 0.7, 1.0), smoothstep(1.0, 7.0, s));
-      col += tcol * k * length(u_sunCol) * 0.6;
+      // Объёмный шлейф: несколько проб вдоль луча вокруг точки сближения с осью. Каждая проба за диском планеты
+      // (t > tP) отбрасывается — шлейф уходит ЗА планету и не просвечивает сквозь её переднюю сторону.
+      // Шум растянут вдоль оси и мелкий поперёк — мягкие волокна, без поперечных «обручей».
+      vec3 B1 = normalize(cross(A, abs(A.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), B2 = cross(A, B1);
+      float s0 = sq / u_r;
+      float w0d = 0.9 + 0.28 * s0;
+      float halfL = 2.6 * w0d * u_r * min(inversesqrt(den), 6.0);
+      float acc = 0.0;
+      vec3 tcol = vec3(0.0);
+      for (int i = 0; i < 12 + u_zero; i++){
+        float tt = tq + halfL * ((float(i) + 0.5) / 12.0 * 2.0 - 1.0);
+        if (tt <= 0.0) continue;
+        if (cover > 0.0 && tt > tP) continue;
+        vec3 pp = rd * tt - u_c;                       // относительно центра планеты
+        float s = dot(pp, A) / u_r;
+        vec3 pr = pp - A * s * u_r;
+        float dist = length(pr) / u_r;
+        float wdt = 0.9 + 0.28 * max(s, 0.0);
+        vec3 lq = vec3(s * 0.22 - u_time * 0.06, dot(pr, B1) / u_r * 1.8 / wdt, dot(pr, B2) / u_r * 1.8 / wdt);
+        float fil = fbm(lq * vec3(1.0, 2.2, 2.2) + SP, 4) * 0.5 + 0.5;
+        float wisp = smoothstep(0.35, 0.85, fil) * (0.6 + 0.4 * fbm(lq * vec3(0.5, 6.0, 6.0) + SP * 1.7, 3));
+        float dens = exp(-pow(dist / wdt, 2.0)) * smoothstep(0.6, 2.2, s) * exp(-max(s, 0.0) / u_exo.z) * wisp / wdt;
+        acc += dens;
+        tcol += mix(vec3(1.0, 0.55, 0.3), vec3(0.55, 0.7, 1.0), smoothstep(1.0, 7.0, s)) * dens;
+      }
+      float dtn = 2.0 * halfL / u_r / 12.0;
+      col += tcol * dtn * 0.32 * length(u_sunCol);
     }
   }
   if (a <= 0.0 && dot(col, col) <= 0.0) discard;

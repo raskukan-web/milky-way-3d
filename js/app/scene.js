@@ -145,6 +145,27 @@
       return Number.isFinite(d) ? Math.max(d, 2e-13) : 1;
     }
 
+    // расстояние до ближайшего объекта на курсе (в конусе ~6° вокруг направления движения или в пределах его размера)
+    courseDist(p, dir) {
+      let best = Infinity;
+      const test = (pos, r) => {
+        const dx = pos[0] - p[0], dy = pos[1] - p[1], dz = pos[2] - p[2];
+        const along = dx * dir[0] + dy * dir[1] + dz * dir[2];
+        if (along <= 0) return;
+        const d2 = dx * dx + dy * dy + dz * dz, perp2 = Math.max(d2 - along * along, 0);
+        const lim = Math.max(r * 2, along * 0.1);
+        if (perp2 > lim * lim) return;
+        const d = Math.sqrt(d2) - r;
+        if (d < best) best = Math.max(d, r * 0.02, 1e-14);
+      };
+      for (const s of this.systems) { test(s.star.pos, s.star.radius); for (const b of s.bodies) test(b.pos, b.radius); }
+      for (const s of this.catalog.stars) test(s.pos, (s.radiusSun || 1) * MW.C.RSUN_LY);
+      for (const s of this.catalog.hygStars) test(s.pos, (s.radiusSun || 1) * MW.C.RSUN_LY);
+      for (const o of this.catalog.dsos) test(o.pos, o.radius * (o.vis === 'galaxy' ? 0.5 : 0.9));
+      for (const bh of this.blackHoles) test(bh.pos, bh.rs * 2.5);
+      return best;
+    }
+
     // не даём камере войти внутрь тел
     collide(cam) {
       const groups = this.systems.map((s) => [s.star, ...s.bodies]);

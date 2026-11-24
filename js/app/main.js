@@ -54,7 +54,7 @@
         let last = performance.now();
         const loop = (now) => {
           try {
-            const dt = Math.min(0.1, Math.max(0.0005, (now - last) / 1000));
+            const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));   // долгий кадр не «выстреливает» камерой
             last = now;
             app.fps = app.fps * 0.95 + (1 / dt) * 0.05;
             app.scene.update(dt, app.cam);

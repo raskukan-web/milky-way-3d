@@ -542,6 +542,8 @@
       if (!this.active || !this.glReady()) return target;
       const gl = r.gl, glc = r.glc, p = this.prof, b = this.body, sc = this.app.scene;
       if (!this.mesh) this.buildMesh(r);
+      // карта альбедо орбитального шейдера (один раз на тело / при загрузке реальной карты)
+      const albMap = r.albedoMap(this.body);
       const ax = bodyAxes(b);
       const P = this.P, camR = v3.len(P), n0 = v3.scale(P, 1 / camR);
       let E = v3.cross([0, 0, 1], n0);
@@ -688,6 +690,7 @@
       t.set('u_shSteps', Tq.shadow ?? 6);
       t.set('u_pen', Math.max(p.sunAng, p.atm ? 0.01 : 0.003));
       const tc = b.tex ? r.texGet(b.tex, true) : null;
+      t.tex('u_albMap', albMap); t.set('u_albK', 1);
       t.tex('u_tex', tc ? tc.tex : r.dummyTex);
       t.set('u_texP', f32([tc ? r.texFade(tc) : 0, tc ? tc.w : 1, p.texGain || 1, 0]));
       const lc = (c) => f32(c);

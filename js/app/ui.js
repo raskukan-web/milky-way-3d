@@ -277,6 +277,8 @@
       return s + 'реальное';
     }
     returnToSun() {
+      this._inertia = null;
+      if (this.app.surface) this.app.surface.exit();
       const t = this.scene.makeTarget({ kind: 'solarView' });
       this.cam.flyTo(t);
       this.select(this.scene.solar.star, true);
@@ -493,6 +495,7 @@
       }
     }
     flyTo(o) {
+      this._inertia = null;                 // докрутка касанием не продолжается после старта автопилота
       this.scene.lastCam = this.cam.pos;
       const t = this.scene.makeTarget(o);
       this.cam.flyTo(t);
@@ -676,7 +679,7 @@
           case 'BracketRight': case 'Period': this.timeStep(1); break;
           case 'BracketLeft': case 'Comma': this.timeStep(-1); break;
           case 'Equal': case 'NumpadAdd': this.cam.throttle = U.clamp(this.cam.throttle * 2, 1e-3, 1e3); break;
-          case 'Minus': case 'NumpadSubtract': this.cam.throttle = U.clamp(this.cam.throttle / 2, 1e-3, 1e4); break;
+          case 'Minus': case 'NumpadSubtract': this.cam.throttle = U.clamp(this.cam.throttle / 2, 1e-3, 1e3); break;
           case 'KeyU': document.body.classList.toggle('panel-hidden'); break;
           case 'KeyX': this.cam.vel = [0, 0, 0]; this.cam.angVel = [0, 0, 0]; this.cam.cancelAuto(); break;
           case 'Escape': if (this.cam.auto) this.cam.cancelAuto(); else this.select(null); break;

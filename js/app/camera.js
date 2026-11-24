@@ -50,7 +50,8 @@
         dur: MW.util.clamp(1.6 + 0.33 * ratio + 0.4 * v3.dist(dir0, dir1), 1.5, 9),
       };
       this.anchor = null;
-      this.vel = [0, 0, 0];
+      // инерция не переживает перелёт: ни линейной, ни угловой скорости, ни накопленных рывков мыши
+      this.vel = [0, 0, 0]; this.angVel = [0, 0, 0]; this.mouseLook = [0, 0]; this.orbitDelta = [0, 0]; this.panDelta = [0, 0];
     }
 
     update(dt, env) {
@@ -74,6 +75,7 @@
         if (s >= 1) {
           const tgt = a.target;
           this.auto = null;
+          this.vel = [0, 0, 0]; this.angVel = [0, 0, 0]; this.speed = 0;
           if (tgt.body) this.anchor = tgt.body;
           this.pivot = tgt;
           if (this.onArrive) this.onArrive(tgt);
@@ -94,7 +96,6 @@
       const SOFT = 20000, VMAX = cosmic ? Math.max(3e5, sunD * 0.35) : 3e5;
       let scale = dEff <= SOFT ? Math.max(dEff, 1e-14) : SOFT * (1 + Math.log(dEff / SOFT));
       if (cosmic) scale = Math.max(scale, Math.min(dEff, sunD) * 0.3);
-      const base = Math.min(scale * 0.9 * this.throttle * boost, VMAX);
       const inp = [0, 0, 0];
       if (k.has('KeyW')) inp[2] -= 1;
       if (k.has('KeyS')) inp[2] += 1;
@@ -104,6 +105,18 @@
       if (k.has('KeyF') || k.has('KeyC')) inp[1] -= 1;
       const want = Q.rot(this.q, inp);
       const wl = v3.len(want);
+      // Ближайший объект ПО КУРСУ (звезда, планета, туманность, галактика): скорость падает пропорционально
+      // оставшемуся расстоянию, а шаг за кадр не превышает 15 % от него — без проскока и «ловушки масштаба».
+      let courseD = Infinity;
+      if (wl > 0 && env.courseDist) {
+        const dirW = v3.scale(want, 1 / wl);
+        this._cf = (this._cf || 0) + 1;
+        if (!this._cd || this._cf % 3 === 0 || v3.dot(dirW, this._cd.dir) < 0.995) this._cd = { dir: dirW, d: env.courseDist(this.pos, dirW) };
+        courseD = this._cd.d;
+        scale = Math.min(scale, Math.max(courseD, 1e-14));
+      }
+      let base = Math.min(scale * 0.9 * this.throttle * boost, VMAX);
+      if (Number.isFinite(courseD)) base = Math.min(base, 0.15 * courseD / Math.max(dt, 1e-3));
       const target = wl > 0 ? v3.scale(want, base / wl) : [0, 0, 0];
       const blend = 1 - Math.exp(-dt / (wl > 0 ? 0.18 : 0.12));
       // ограничение скорости текущей «тягой» — инерция не проносит мимо объектов
