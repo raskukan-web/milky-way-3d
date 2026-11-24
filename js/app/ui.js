@@ -193,6 +193,7 @@
       $('#btnSun').onclick = () => this.returnToSun();
       $('#btnGalaxy').onclick = () => { this.select(this.scene.galaxyView); this.flyTo(this.scene.galaxyView); };
       $('#cardFly').onclick = () => this.selected && this.flyTo(this.selected.obj);
+      $('#cardFlyTop').onclick = () => this.selected && this.flyTo(this.selected.obj);
       $('#cardClose').onclick = () => this.select(null);
       $('#tPause').onclick = () => this.togglePause();
       $('#tSlow').onclick = () => this.timeStep(-1);
@@ -479,7 +480,7 @@
         if (e.pointerType === 'touch') {
           this._inertia = null;                        // новое касание останавливает докрутку
           touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          if (touches.size === 2) { down = null; pinch = { d: pinchDist() }; try { cv.setPointerCapture(e.pointerId); } catch (err) { /* */ } return; }
+          if (touches.size === 2) { down = null; const pp = [...touches.values()]; pinch = { d: pinchDist(), mx: (pp[0].x + pp[1].x) / 2, my: (pp[0].y + pp[1].y) / 2 }; try { cv.setPointerCapture(e.pointerId); } catch (err) { /* */ } return; }
           if (touches.size > 2) return;
         }
         if (e.button === 1) e.preventDefault();
@@ -499,8 +500,16 @@
             pinch.d = d;
             const cam = this.cam;
             cam.cancelAuto();
+            const D = Math.max(cam.dEff || 1e-9, 1e-12);
             const f = MW.util.clamp(1 - Math.pow(r, -3), -8, 0.9);
-            cam.pos = v3.madd(cam.pos, cam.forward, Math.max(cam.dEff || 1e-9, 1e-12) * f);
+            cam.pos = v3.madd(cam.pos, cam.forward, D * f);
+            // стрейф: середина двух пальцев сдвинулась — камера смещается в плоскости экрана (как стрелки на ПК);
+            // масштаб — расстояние до ближайшей поверхности (та же «скорость полёта», что у клавиш)
+            const pp = [...touches.values()], mx = (pp[0].x + pp[1].x) / 2, my = (pp[0].y + pp[1].y) / 2;
+            const ddx = mx - pinch.mx, ddy = my - pinch.my;
+            pinch.mx = mx; pinch.my = my;
+            const W = Math.max(cv.clientWidth, 1);
+            cam.pos = v3.add(cam.pos, v3.add(v3.scale(cam.right, -ddx / W * D * 1.6), v3.scale(cam.up, ddy / W * D * 1.6)));
             return;
           }
         }
@@ -547,8 +556,8 @@
         else { cam.panDelta[0] += dx; cam.panDelta[1] += dy; }
       });
       cv.addEventListener('pointerup', (e) => {
-        if (down && down.moved < 4 && down.b === 0) {
-          const o = this.pick(e.clientX, e.clientY);
+        if (down && down.moved < (down.touch ? 10 : 4) && down.b === 0) {
+          const o = this.pick(e.clientX, e.clientY, down.touch);
           const now = performance.now();
           if (o) {
             this.select(o);
@@ -617,49 +626,70 @@
     }
 
     // выбор объекта по клику
-    pick(x, y) {
-      const sc = this.scene, r = this.r;
-      let best = null, bd = 16;
-      const test = (o, pos, bonus) => {
+    /* Выбор объекта кликом / касанием.
+       Кандидаты собираются в радиусе попадания (мышь ~16 px, палец ~32 px от края видимого диска или от подписи) и
+       делятся на уровни: 0 — тела «переднего плана» (звёзды и планеты активной системы и Солнечной, спутники,
+       аппараты, чёрные дыры, любой объект с видимым диском ≥ 3 px); 1 — звёзды и объекты каталогов; 2 — тусклые
+       звёзды HYG и процедурные. Выигрывает объект более приоритетного уровня, затем — ближе к точке касания и
+       крупнее на экране, затем — ближе к камере. Так далёкая фоновая звезда никогда не перехватит клик у планеты. */
+    pick(x, y, touch) {
+      const sc = this.scene, r = this.r, cam = this.cam;
+      const R0 = touch ? 32 : 16;
+      const cands = [];
+      // подписи: касание по тексту подписи — тоже попадание в объект
+      const lab = (this._labelHits || []).filter((h) => h.obj && x >= h.x0 - 4 && x <= h.x1 + 4 && y >= h.y0 - 6 && y <= h.y1 + 6);
+      const add = (o, pos, tier, maxRad) => {
         const p = r.project(pos);
         if (!p || !p.onScreen) return;
-        const rad = o.radius ? r.pxRadius(o.radius * (o.ring ? o.ring[1] : 1), p.d) : 0;
-        const d = Math.max(0, Math.hypot(p.x - x, p.y - y) - rad) - (bonus || 0);
-        if (d < bd) { bd = d; best = o; }
+        let rad = o.radius ? r.pxRadius(o.radius * (o.ring ? o.ring[1] : 1), p.d) : 0;
+        if (maxRad) rad = Math.min(rad, maxRad);
+        const gap = Math.max(0, Math.hypot(p.x - x, p.y - y) - rad);
+        const viaLabel = lab.some((h) => h.obj === o);
+        if (gap > R0 && !viaLabel) return;
+        // протяжённый объект с видимым диском (туманность, галактика) поднимается выше звёзд, но остаётся ниже тел систем
+        const t = rad >= 3 && tier > 0 ? 0.5 : tier;
+        cands.push({ o, t, gap: viaLabel ? Math.min(gap, 2) : gap, rad, depth: p.d });
       };
-      for (const s of sc.systems) { test(s.star, s.star.pos, 3); for (const b of s.bodies) test(b, b.pos, b.kind === 'planet' ? 4 : 2); }
-      const mag = (o) => o.absMag + 5 * Math.log10(Math.max(v3.dist(this.cam.pos, o.pos), 1e-12) / 32.6156);
-      for (const s of sc.catalog.stars) if (mag(s) < r.s.magLimit + 1) test(s, s.pos, 1);
-      for (const c of sc.catalog.binaries) if (mag(c) < r.s.magLimit + 1 || r.pxRadius(c.radius, v3.dist(this.cam.pos, c.pos)) > 1) test(c, c.pos, 1.5);
-      // ~25 000 реальных звёзд HYG (видимые с текущей точки)
-      const lim = r.s.magLimit + 0.5;
-      for (const s of sc.catalog.hygStars) if (mag(s) < lim) test(s, s.pos, 0.5);
-      // объекты глубокого космоса: из видимых — ближайший к курсору (тысячи невидимых тусклых галактик не перехватывают клик)
-      let bestD = null, bdd = Infinity;
+      for (const s of sc.systems) { add(s.star, s.star.pos, 0); for (const b of s.bodies) add(b, b.pos, 0); }
+      for (const pr of sc.probes) if (v3.len(cam.pos) < 30000 * MW.C.AU_LY) add(pr, pr.pos, 0);
+      for (const bh of sc.blackHoles || [sc.bh]) add(bh, bh.pos, bh === sc.bh ? 1 : 0, 0);
+      const mag = (o) => o.absMag + 5 * Math.log10(Math.max(v3.dist(cam.pos, o.pos), 1e-12) / 32.6156);
+      for (const s of sc.catalog.stars) if (mag(s) < r.s.magLimit + 1) add(s, s.pos, 1);
+      for (const c of sc.catalog.binaries) if (mag(c) < r.s.magLimit + 1 || r.pxRadius(c.radius, v3.dist(cam.pos, c.pos)) > 1) add(c, c.pos, 1);
+      // объекты глубокого космоса: только видимые; огромные (камера внутри) не перехватывают клик целиком
       for (const o of sc.catalog.dsos) {
         const pr = r.project(o.pos);
         if (!pr || !pr.onScreen) continue;
         if (o.lite && r.dsoVisible && !r.dsoVisible(o, pr.d)) continue;
-        const rad = Math.min(r.pxRadius(o.radius, pr.d), 60), dd = Math.hypot(pr.x - x, pr.y - y);
-        if (dd < Math.max(rad, 10) && dd - rad * 0.5 < bdd) { bdd = dd - rad * 0.5; bestD = o; }
+        const big = r.pxRadius(o.radius, pr.d) > 300;
+        add(o, o.pos, big ? 2 : 1, big ? 0 : 300);
       }
-      if (bestD && (!best || bd > 6)) { best = bestD; bd = 6; }
-      test(sc.bh, sc.bh.pos, 2);
-      for (const pr of sc.probes) if (v3.len(this.cam.pos) < 30000 * MW.C.AU_LY) test(pr, pr.pos, 3);
-      if (!best || bd > 4) {
-        for (let li = 0; li < sc.local.levels.length; li++) {
-          const L = sc.local.levels[li];
-          if (!L.pos) continue;
-          for (let i = 0; i < L.count; i++) {
-            const pos = [L.pos[i * 3], L.pos[i * 3 + 1], L.pos[i * 3 + 2]];
-            const dd = v3.dist(this.cam.pos, pos);
-            const m = L.props[i * 9 + 6] + 5 * Math.log10(Math.max(dd, 1e-12) / 32.6156);
-            if (m > r.s.magLimit) continue;
-            const p = r.project(pos);
-            if (!p || !p.onScreen) continue;
-            const d = Math.hypot(p.x - x, p.y - y) + m * 0.3;
-            if (d < bd) { bd = d; best = sc.local.star(li, i); }
-          }
+      const lim = r.s.magLimit + 0.5;
+      for (const s of sc.catalog.hygStars) if ((s.proper || mag(s) < lim - 2.5) && mag(s) < lim) add(s, s.pos, 2);
+      cands.sort((a, b) => (a.t - b.t) || (a.gap - b.gap - 0.15 * (Math.min(a.rad, 40) - Math.min(b.rad, 40))) || (a.depth - b.depth));
+      if (cands.length) return cands[0].o;
+      // тусклые звёзды HYG и процедурные — только если ничего крупнее рядом нет
+      let best = null, bd = R0 * 0.7;
+      for (const s of sc.catalog.hygStars) {
+        if (mag(s) >= lim) continue;
+        const p = r.project(s.pos);
+        if (!p || !p.onScreen) continue;
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d < bd) { bd = d; best = s; }
+      }
+      if (best) return best;
+      for (let li = 0; li < sc.local.levels.length; li++) {
+        const L = sc.local.levels[li];
+        if (!L.pos) continue;
+        for (let i = 0; i < L.count; i++) {
+          const pos = [L.pos[i * 3], L.pos[i * 3 + 1], L.pos[i * 3 + 2]];
+          const dd = v3.dist(cam.pos, pos);
+          const m = L.props[i * 9 + 6] + 5 * Math.log10(Math.max(dd, 1e-12) / 32.6156);
+          if (m > r.s.magLimit) continue;
+          const p = r.project(pos);
+          if (!p || !p.onScreen) continue;
+          const d = Math.hypot(p.x - x, p.y - y) + m * 0.3;
+          if (d < bd) { bd = d; best = sc.local.star(li, i); }
         }
       }
       return best;
@@ -705,6 +735,7 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       const r = this.r, cam = this.cam, sc = this.scene;
+      this._labelHits = [];
       const occ = [];
       const free = (x, y, wd) => { for (const o of occ) if (Math.abs(o[0] - x) < (o[2] + wd) / 2 + 4 && Math.abs(o[1] - y) < 13) return false; occ.push([x, y, wd]); return true; };
       const selName = this.selected ? this.selected.obj.name : null;
@@ -733,6 +764,7 @@
         const tw = ctx.measureText(text).width;
         const ox = opts.center ? -tw / 2 : 8, oy = opts.center ? 4 : -6;
         if (!opts.force && !free(p.x + ox + tw / 2, p.y + oy, tw)) return p;
+        if (opts.obj) this._labelHits.push({ obj: opts.obj, x0: p.x + ox, x1: p.x + ox + tw, y0: p.y + oy - (opts.size || 12), y1: p.y + oy + 3 });
         ctx.globalAlpha = opts.alpha === undefined ? 1 : opts.alpha;
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
         ctx.fillText(text, p.x + ox + 1, p.y + oy + 1);
@@ -767,12 +799,12 @@
       for (const sys of sc.systems) {
         const dSys = v3.dist(cam.pos, sys.star.pos);
         if (dSys < 3000 * MW.C.AU_LY) {
-          label(sys.star.name, sys.star.pos, '#ffe9a8', { bold: true });
+          label(sys.star.name, sys.star.pos, '#ffe9a8', { bold: true, obj: sys.star });
           for (const b of sys.bodies) {
             if (b.kind === 'moon') { const dp = v3.dist(cam.pos, b.parentBody.pos); if (dp > b.parentBody.radius * 400) continue; }
-            label(b.name, b.pos, b.kind === 'moon' ? '#a9b4c8' : '#cfe0ff', { size: b.kind === 'moon' ? 11 : 12 });
+            label(b.name, b.pos, b.kind === 'moon' ? '#a9b4c8' : '#cfe0ff', { size: b.kind === 'moon' ? 11 : 12, obj: b });
           }
-        } else if (!sys.isSolar && galFade(dSys) > 0.02) label(sys.star.name, sys.star.pos, '#ffe9a8', { alpha: galFade(dSys) });
+        } else if (!sys.isSolar && galFade(dSys) > 0.02) label(sys.star.name, sys.star.pos, '#ffe9a8', { alpha: galFade(dSys), obj: sys.star });
       }
       if (sunD >= 3000 * MW.C.AU_LY) label('☉ Солнце', [0, 0, 0], '#ffe27a', { bold: true });
       if (sunD < 20000 * MW.C.AU_LY) for (const pr of sc.probes) label(pr.name, pr.pos, MW.color.hex(pr.color), { size: 12, bold: true });
@@ -783,7 +815,7 @@
         const m = s.absMag + 5 * Math.log10(Math.max(dd, 1e-9) / 32.6156);
         if (m > lim && dd > 30) continue;
         const gf = galFade(dd); if (gf <= 0.02) continue;
-        label(s.name, s.pos, '#d9e4ff', { size: 11, alpha: U.clamp(1.2 - (m - lim + 2) * 0.25, 0.45, 1) * gf });
+        label(s.name, s.pos, '#d9e4ff', { size: 11, alpha: U.clamp(1.2 - (m - lim + 2) * 0.25, 0.45, 1) * gf, obj: s });
       }
       if (!this._namedHyg) this._namedHyg = sc.catalog.hygStars.filter((s) => s.proper);
       for (const s of this._namedHyg) {
@@ -791,7 +823,7 @@
         const m = s.absMag + 5 * Math.log10(Math.max(dd, 1e-9) / 32.6156);
         if (m > lim - 0.3 && dd > 20) continue;
         const gf = galFade(dd); if (gf <= 0.02) continue;
-        label(s.name, s.pos, '#c3cfee', { size: 10.5, alpha: U.clamp(1.1 - (m - lim + 2) * 0.25, 0.4, 0.9) * gf });
+        label(s.name, s.pos, '#c3cfee', { size: 10.5, alpha: U.clamp(1.1 - (m - lim + 2) * 0.25, 0.4, 0.9) * gf, obj: s });
       }
       // созвездия
       if (r.s.constellations && sunD < 1500) {
@@ -821,7 +853,7 @@
         // объекты внутри диска (в т.ч. ориентиры вроде Кассиопеи A, Лебедя X-1) — только вблизи
         const gf = GAL_IN.has(o.vis) ? galFade(dO) : 1;
         if (gf <= 0.02) continue;
-        label(o.name, o.pos, { nebula: '#ff9ab0', snr: '#ffb27a', planetary: '#7af0d0', globular: '#ffe4a8', cluster: '#a8c8ff', galaxy: '#d8c8ff', pulsar: '#8fd4ff', quasar: '#9fc0ff', galcluster: '#ffd9a0', xray: '#b6c8ff' }[o.vis] || '#ddd', { size: 11, bold: landmark, alpha: gf });
+        label(o.name, o.pos, { nebula: '#ff9ab0', snr: '#ffb27a', planetary: '#7af0d0', globular: '#ffe4a8', cluster: '#a8c8ff', galaxy: '#d8c8ff', pulsar: '#8fd4ff', quasar: '#9fc0ff', galcluster: '#ffd9a0', xray: '#b6c8ff' }[o.vis] || '#ddd', { size: 11, bold: landmark, alpha: gf, obj: o });
       }
       label('Стрелец A*', sc.bh.pos, '#ffb060', { bold: v3.dist(cam.pos, sc.bh.pos) < 2000 });
       if (sunD > 6000) for (const a of MW.galaxy.armLabels()) label(a.name, a.pos, 'rgba(170,200,255,0.8)', { size: 12, center: true });

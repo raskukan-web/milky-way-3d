@@ -145,3 +145,20 @@ input[type=checkbox] { accent-color: #7fb0ff; }
   body.panel-hidden #card, body.panel-hidden #hud { opacity: 1; pointer-events: auto; transform: none; }
 }
 body.mobile button, body.mobile .chip { min-height: 32px; }
+
+/* ---------- телефоны (< 768 px): компактная шторка карточки и HUD без обрезания ---------- */
+#cardFlyTop { display: none; }
+@media (max-width: 767px) {
+  #card { max-height: 33vh; padding: 10px 12px; font-size: 12px; }
+  #card h2 { font-size: 17px; margin: 0 96px 2px 0; }
+  #cardFlyTop { display: block; position: absolute; top: 8px; right: 44px; padding: 4px 10px; font-size: 12.5px; line-height: 22px; }
+  #cardFly { display: none; }
+  #cardRows td { padding: 2px 0; }
+  #cardInfo { font-size: 12px; margin: 6px 0; }
+  #hud { font-size: 10.5px; padding: 5px 8px; }
+  #hud .hrow { gap: 5px; flex-wrap: wrap; }
+  #hud .hrow b { min-width: 0; }
+  #hud .hrow.time button { padding: 1px 6px; font-size: 10.5px; }
+  #hDate { flex-basis: 100%; order: 5; }
+  #hRate, #hFps { order: 6; }
+}
