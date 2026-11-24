@@ -486,5 +486,22 @@
     }
   }
 
-  MW.procsystem = { generateSystem, starVisual, starKind, objRnd, starTint };
+  /* Сохранность ударных кратеров (0…1) по законам планетологии: плотная атмосфера, эрозия, вулканизм и молодой
+     трещиноватый лёд их стирают; древние безатмосферные тела покрыты ими сплошь. */
+  function craterFactor(b) {
+    const ID = { earth: 0, venus: 0, titan: 0, io: 0, europa: 0, enceladus: 0, moon: 1, mercury: 1, callisto: 1, rhea: 0.95,
+      titania: 0.85, phobos: 1, deimos: 0.9, ganymede: 0.6, mars: 0.45, pluto: 0.3, triton: 0.12 };
+    if (b.id in ID) return ID[b.id];
+    const t = b.type, T = b.temp || b.teq || 0, dens = b.atmoDens || 0;
+    if ([1, 2, 4, 5, 6, 7, 9, 10, 11, 14, 15, 17].includes(t)) return 0;   // газовые/ледяные гиганты, Венера, Ио, лава…
+    if (T > 700) return 0;                                                   // горячая лавовая кора
+    if (t === 12 || dens > 2) return 0;                                      // океаны / плотная атмосфера
+    if (t === 0 || t === 8) return 0.9;                                      // древние безвоздушные тела
+    if (t === 16) return dens > 0.5 ? 0.3 : 0.8;
+    if (t === 3) return 0.4;
+    if (t === 13) return dens > 0.5 ? 0.15 : 0.7;
+    return 0.5;
+  }
+  MW.craterFactor = craterFactor;
+  MW.procsystem = { generateSystem, starVisual, starKind, objRnd, starTint, craterFactor };
 })();

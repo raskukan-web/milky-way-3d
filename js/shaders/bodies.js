@@ -235,6 +235,11 @@ uniform mat3 u_bodyRot;
 uniform vec3 u_pole, u_sunDir, u_sunCol;
 uniform int u_type, u_oct;
 uniform float u_seed, u_time, u_bumpK, u_bumpEps, u_ambient, u_cloudRot, u_earthLod, u_micro, u_foot;
+uniform float u_crater;   // сохранность ударных кратеров 0…1 (планетология: атмосфера, вулканизм, молодой лёд их стирают)
+uniform float u_flat;     // полярное сжатие (Сатурн 0,098, Юпитер 0,065): тело — эллипсоид вращения
+vec3 gHitP;               // точка поверхности относительно центра (для тени колец)
+// растяжение вдоль полярной оси: в этом пространстве сплюснутое тело — сфера радиуса u_r
+vec3 oblS(vec3 v){ return v + (1.0 / (1.0 - u_flat) - 1.0) * dot(v, u_pole) * u_pole; }
 uniform vec3 u_col1, u_col2, u_col3;
 uniform vec4 u_par;    // x: уровень океана, y: шапки/темп., z: облачность, w: турбулентность
 uniform vec4 u_par2;   // x: особенность (1 БКП, 2 тёмное пятно, 3 шестиугольник), y: частота полос
@@ -299,7 +304,16 @@ float H(vec3 n){
     float w1 = 1.0 - smoothstep(0.2, 0.5, 300.0 * u_foot);
     float w2 = 1.0 - smoothstep(0.2, 0.5, 1200.0 * u_foot);
     float w3 = 1.0 - smoothstep(0.2, 0.5, 4800.0 * u_foot);
-    h += u_micro * (0.012 * w1 * craters(n, 300.0, 0.3) + 0.004 * w2 * ridged(n * 1200.0 + SP, 3) + 0.0012 * w3 * fbm(n * 4800.0 + SP, 2));
+#if FAM == 2
+    // Земля: эрозионный рельеф (ridged multifractal — хребты, нулевые линии шума — речные долины), только на суше
+    float lm = earthLand(n);
+    float rm = ridged(n * 300.0 + SP, 4);
+    float val = 1.0 - smoothstep(0.0, 0.18, abs(fbm(n * 160.0 + SP * 2.0, 3)));
+    h += u_micro * lm * (0.011 * w1 * (rm - 0.45) - 0.006 * w1 * val + 0.0035 * w2 * ridged(n * 1200.0 + SP, 3) + 0.001 * w3 * fbm(n * 4800.0 + SP, 2));
+#else
+    float cr = u_crater > 0.01 ? craters(n, 300.0, 0.3) : 0.0;
+    h += u_micro * (0.012 * w1 * mix(0.6 * ridged(n * 300.0 + SP, 3) - 0.3, cr, u_crater) + 0.004 * w2 * ridged(n * 1200.0 + SP, 3) + 0.0012 * w3 * fbm(n * 4800.0 + SP, 2));
+#endif
   }
 #endif
   return h;
@@ -327,8 +341,8 @@ float H0(vec3 n){
 float H0p(vec3 n){
 #if FAM == 0
   if (u_type == 0 || u_type == 8){
-    return 0.3 * fbm(n * 3.0 + SP, u_oct) + 0.3 * craters(n, 5.0, 0.33) + 0.18 * craters(n, 13.0, 0.3)
-         + 0.1 * craters(n, 34.0, 0.28) + 0.05 * craters(n, 85.0, 0.25);
+    float hc = u_crater > 0.01 ? 0.3 * craters(n, 5.0, 0.33) + 0.18 * craters(n, 13.0, 0.3) + 0.1 * craters(n, 34.0, 0.28) + 0.05 * craters(n, 85.0, 0.25) : 0.0;
+    return 0.3 * fbm(n * 3.0 + SP, u_oct) + hc * u_crater + (1.0 - u_crater) * 0.25 * ridged(n * 6.0 + SP, 4);
   }
   if (u_type == 9) return 0.2 * fbm(n * 4.0 + SP, 4);
   if (u_type == 10) return -0.3 * smoothstep(0.88, 1.0, ridged(n * 5.0 + SP, 4));
@@ -336,11 +350,11 @@ float H0p(vec3 n){
   // сеть лавовых русел — один раз на вызов (тяжёлая функция; встраивается в шейдер в одном месте)
   float lrv = (u_type == 15 || (u_exo.x > 4.5 && u_exo.x < 5.5)) ? lavaRiv(n) : 0.0;
   if (u_type == 3){
-    return 0.4 * fbm(n * 2.0 + SP, u_oct) + 0.2 * craters(n, 8.0, 0.3) + 0.08 * craters(n, 25.0, 0.28)
+    return 0.4 * fbm(n * 2.0 + SP, u_oct) + u_crater * (0.2 * craters(n, 8.0, 0.3) + 0.08 * craters(n, 25.0, 0.28))
          - 0.25 * smoothstep(0.85, 1.0, ridged(n * vec3(3.0, 3.0, 8.0) + SP, 4));
   }
   if (u_type == 15){
-    return 0.35 * fbm(n * 3.0 + SP, u_oct) + 0.12 * craters(n, 9.0, 0.3) - 0.2 * smoothstep(0.8, 0.97, lrv);
+    return 0.35 * fbm(n * 3.0 + SP, u_oct) + 0.12 * u_crater * craters(n, 9.0, 0.3) - 0.2 * smoothstep(0.8, 0.97, lrv);
   }
   if (u_type == 12 || u_type == 13 || u_type == 16){
     // резкость рельефа по массе: 1 — лёгкий мир (горы и кратеры), 0.15 — суперземля (сглажено гравитацией)
@@ -349,7 +363,7 @@ float H0p(vec3 n){
     float m = ridged(n * 4.0 + SP * 0.7, u_oct);
     float h = c * (0.75 + 0.25 * rk) + 0.45 * (0.3 + 1.3 * rk) * m * smoothstep(-0.05, 0.2, c - u_par.x);
     float ck = u_type == 12 ? max(rk - 0.6, 0.0) * 2.0 : 0.4 + 1.2 * rk;
-    h += ck * (0.25 * craters(n, 7.0, 0.3) + 0.12 * craters(n, 20.0, 0.28) + 0.05 * craters(n, 55.0, 0.25));
+    if (u_crater > 0.01) h += ck * u_crater * (0.25 * craters(n, 7.0, 0.3) + 0.12 * craters(n, 20.0, 0.28) + 0.05 * craters(n, 55.0, 0.25));
     // горячий мир в захвате: просевшие русла застывшей лавы
     if (u_exo.x > 4.5 && u_exo.x < 5.5) h -= 0.15 * smoothstep(0.84, 0.97, lrv);
     // «глазное яблоко»: ледяной панцирь в сотни метров сглаживает рельеф ложа
@@ -939,11 +953,31 @@ vec4 shadeRing(float r, vec3 p, vec3 rd, vec3 L){
     vec3 tc = textureLod(u_ringTex, vec2(clamp(x, 0.0, 1.0), 0.5), lod).rgb * 2.2;
     col = mix(col, (x > 0.0 && x < 1.0) ? tc : vec3(0.7, 0.66, 0.6), u_texQ.y);
   }
-  vec2 hs = raySphere(p, L, vec3(0.0), u_r);
+  vec3 LS = oblS(L);
+  vec2 hs = raySphere(oblS(p), normalize(LS), vec3(0.0), u_r);
   float sh = (hs.x < hs.y && hs.y > 0.0) ? 0.03 : 1.0;
   float sunSide = dot(L, u_pole), viewSide = dot(-rd, u_pole);
   float g = dot(rd, L);
-  float I = (sunSide * viewSide > 0.0) ? (0.25 + 0.9 * pow(abs(sunSide), 0.5)) : (1.0 - d) * 2.0 * (0.3 + (u_ring.w > 2.5 ? 0.8 : 1.6) * pow(max(g, 0.0), 4.0));
+  float mu0 = abs(sunSide), mu = max(abs(viewSide), 0.02);
+  float I;
+  if (u_ring.w < 1.5){
+    // Сатурн: ледяные кольца A и B — яркие кремово-золотистые (альбедо ~0,6); освещённость по Ломмелю–Зеелигеру
+    // (слой частиц): при низком Солнце кольца не тускнеют так сильно, как ламбертова поверхность
+    col = pow(col, vec3(1.25)) * 1.35;
+    // мелкие концентрические борозды (волны плотности, «граммофонная пластинка»): гаснут, когда они уже пикселя
+    float gk = 1.0 - smoothstep(0.00015, 0.0009, gRingW);
+    float grv = 0.5 * sin(r * 2300.0 + 3.0 * sin(r * 170.0)) + 0.3 * sin(r * 5100.0) + 0.2 * (hash12(vec2(floor(r * 9000.0), 7.0)) * 2.0 - 1.0);
+    d = clamp(d * (1.0 + 0.22 * gk * grv), 0.0, 1.0);
+    col *= 1.0 + 0.12 * gk * grv;
+    if (sunSide * viewSide > 0.0) I = 0.35 + 1.25 * (2.0 * mu0 / (mu0 + mu)) * (0.55 + 0.45 * sqrt(mu0));
+    // неосвещённая сторона: свет просачивается сквозь разреженные кольца (C, щель Кассини) и рассеивается вперёд
+    else I = (1.0 - d) * (0.7 + 4.0 * pow(max(g, 0.0), 5.0)) + 0.08;
+    // рассеяние вперёд (Ми) на пыли при взгляде против Солнца: пыльные кольца (C, F, щель Кассини) светятся на просвет
+    // (снимок «Кассини» 2006 г. в тени Сатурна); в секторе тени планеты (sh) свечения нет
+    I += (1.0 - d) * (9.0 * pow(max(g, 0.0), 10.0) + 30.0 * pow(max(g, 0.0), 60.0));
+  } else {
+    I = (sunSide * viewSide > 0.0) ? (0.25 + 0.9 * pow(abs(sunSide), 0.5)) : (1.0 - d) * 2.0 * (0.3 + (u_ring.w > 2.5 ? 0.8 : 1.6) * pow(max(g, 0.0), 4.0));
+  }
   return vec4(col * I * sh * u_sunCol * d, d);
 }
 vec4 atmosphere(vec3 rd, float t0, float t1, vec3 L){
@@ -1046,9 +1080,10 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
   diff *= cloudSh * gShadow;
   float rs = 1.0;
   if (u_ring.w > 0.5){
-    vec3 Pw = nW * u_r;
+    vec3 Pw = gHitP;
     float dn = dot(L, u_pole);
     if (abs(dn) > 1e-5){
+      // луч к звезде пересекает плоскость колец при t > 0: тень ложится на полушарие, противоположное звезде
       float t = -dot(Pw, u_pole) / dn;
       if (t > 0.0){ float r = length(Pw + L * t) / u_r; if (r > u_ring.x && r < u_ring.y) rs = 1.0 - ringDensity(r) * u_ring.z * 0.9; }
     }
@@ -1067,7 +1102,9 @@ vec3 shadePlanet(vec3 nW, vec3 rd, vec3 L){
     // солнечный блик: резкое ядро + широкое сияние ряби волн (как на снимках Земли с орбиты)
     lit += spec * (pow(nh, 900.0) * 7.0 + pow(nh, 140.0) * 0.45 + pow(nh, 24.0) * 0.04) * (0.3 + fres) * smoothstep(0.0, 0.1, ndlS) * (1.0 - cl);
   }
-  lit = mix(lit, vec3(0.95) * smoothstep(-0.05, 0.3, ndlS) * max(ndlS + 0.05, 0.0), cl);
+  // объём облаков: вершины, обращённые к звезде, ярче; обратные склоны и тонкие края — в собственной тени
+  float cRel3 = clamp(0.82 + 3.0 * (cl - clS), 0.5, 1.18) * (0.88 + 0.12 * smoothstep(0.2, 0.9, cl));
+  lit = mix(lit, vec3(0.95) * cRel3 * smoothstep(-0.05, 0.3, ndlS) * max(ndlS + 0.05, 0.0), cl);
   lit *= u_sunCol * rs;
   if (u_exo.x > 4.5 && u_exo.x < 5.5){ float tz = exp(-pow((ndlS - 0.05) / 0.22, 2.0)); lit += vec3(0.62, 0.5, 0.2) * tz * 0.1 * u_sunCol; }
   float night = smoothstep(0.08, -0.12, ndlS);
@@ -1105,9 +1142,13 @@ void main(){
   // сдвиг в поле шума на десятки периодов: материки, кратеры и штормы у каждой планеты свои
   SP = vec3(u_seed * 13.1, u_seed * 7.7, u_seed * 3.3) + u_rnd.xyz * vec3(91.7, 57.3, 77.9);
   vec3 rd = rayDir();
-  float tc = dot(u_c, rd);
-  if (tc < 0.0 && u_full < 0.5) discard;
-  vec3 cpv = rd * tc - u_c;
+  if (dot(u_c, rd) < 0.0 && u_full < 0.5) discard;
+  // сплюснутое тело: в растянутом вдоль оси пространстве — сфера; параметр луча масштабируется на mS
+  vec3 rdS = oblS(rd);
+  float mS = length(rdS);
+  vec3 rdN = rdS / mS, cS = oblS(u_c);
+  float tc = dot(cS, rdN);
+  vec3 cpv = rdN * tc - cS;
   float x = length(cpv) / u_r;
   vec3 L = u_sunDir;
   float cover = 0.0, tP = 1e20;
@@ -1118,8 +1159,10 @@ void main(){
   if (cover > 0.0){
     float xs = min(x, 0.99999);
     float zz = sqrt(1.0 - xs * xs);
-    tP = tc - zz * u_r;
-    vec3 nHit = normalize(cpv - rd * zz * u_r);
+    tP = (tc - zz * u_r) / mS;
+    vec3 nS = (cpv - rdN * zz * u_r) / u_r;
+    vec3 nHit = normalize(oblS(nS));          // нормаль эллипсоида
+    gHitP = rd * tP - u_c;
     pc = shadePlanet(nHit, rd, L);
     // Френель: в центре диска дымка почти не видна (облака не «выжигаются»), к краю — плотный ободок
     limbF = mix(u_hazeFloor, 1.0, pow(1.0 - max(dot(nHit, -rd), 0.0), 3.0));

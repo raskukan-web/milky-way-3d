@@ -91,7 +91,16 @@ void main(){
     vec2 gx = dFdx(uv), gy = dFdy(uv), gx2 = dFdx(uv2), gy2 = dFdy(uv2);
     if (abs(gx2.x) + abs(gy2.x) < abs(gx.x) + abs(gy.x)){ gx = gx2; gy = gy2; }   // без шва на l = 180°
     vec3 pano = textureGrad(u_pano, uv, gx, gy).rgb * u_panoGain;
-    col = mix(col, pano, u_panoK);
+    // UV — строго из 3D-направления в галактических координатах (z — Северный галактический полюс): без шва.
+    // Но у полюсов равнопромежуточной панорамы каждая строка снимка — растянутые копии считанных пикселей,
+    // и звёзды там вытягиваются в «водоворот». Около полюсов (|b| > ~70°) показываем усреднённый тон строки
+    // и процедурные звёзды вместо растянутых пикселей.
+    float pw = smoothstep(0.93, 0.985, abs(d.z));
+    if (pw > 0.0){
+      vec3 avg = textureLod(u_pano, vec2(0.5, uv.y), 9.0).rgb * u_panoGain;
+      pano = mix(pano, avg * 0.8, pw);
+    }
+    col = mix(col, pano, u_panoK * (1.0 - 0.55 * pw));
   }
   if (u_grid > 0.5){
     float pw = u_pixAng * 1.2;

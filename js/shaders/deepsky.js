@@ -34,6 +34,7 @@ out vec2 v_px;
 flat out vec4 v_par;
 flat out float v_I;
 flat out float v_pr;
+flat out float v_fade;
 void main(){
   vec3 rel = (a_hi - u_camHi) + (a_lo - u_camLo);
   float D = max(length(rel), 1e-30);
@@ -43,7 +44,14 @@ void main(){
   float pr = atan(R / D) * u_pxPerRad;
   float m = a_par.w + 5.0 * log2(D / 32.6156) * 0.30103;
   float I = clamp(exp2(-1.3287712 * (m - u_magLim)), 0.0, 4.0);
-  v_rel = rel; v_nrm = a_nrm; v_col = a_col; v_par = vec4(R, a_par.yzw); v_I = I; v_pr = pr;
+  // объекты с оценочным расстоянием (+100 в сиде): их 3D-положение условно — из всех таких объектов на одном
+  // «типовом» расстоянии (4 000 св. лет и т. п.) получалась бы сферическая оболочка — «мыльный пузырь» или кольцо
+  // при взгляде на Галактику со стороны. Они видны, пока камера рядом с Солнцем, и гаснут при удалении.
+  float est = step(99.5, a_par.z);
+  float distS = length(a_hi + a_lo), camS = length(u_camHi + u_camLo);
+  v_fade = est > 0.5 ? 1.0 - smoothstep(distS * 0.08, distS * 0.3, camS) : 1.0;
+  if (v_fade < 0.003){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  v_rel = rel; v_nrm = a_nrm; v_col = a_col; v_par = vec4(R, a_par.y, a_par.z - est * 100.0, a_par.w); v_I = I; v_pr = pr;
   // далёкие тусклые точки не рисуем
   if (pr < 2.0 && I < 0.003){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec4 pv = u_view * vec4(rel, 1.0);
@@ -54,7 +62,8 @@ void main(){
   if (pv.z > R){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   // полуразмер квада в плоскости центра: конус касательных к сфере (а не угловой радиус × 1,08)
   float sinA = min(R / D, 0.999);
-  float sizeW = max(R / sqrt(1.0 - sinA * sinA) * (D / max(-pv.z, 1e-30)) * 1.04, 2.6 * u_scale * D / u_pxPerRad);
+  float minPx = vol ? 1.6 : 2.6;   // туманности — строго в реальном угловом размере (точка ≤ 1,6 px — только блеск)
+  float sizeW = max(R / sqrt(1.0 - sinA * sinA) * (D / max(-pv.z, 1e-30)) * 1.04, minPx * u_scale * D / u_pxPerRad);
   float sizePx = sizeW * u_pxPerRad / D;
   pv.xy += a_corner * sizeW;
   v_px = a_corner * sizePx;
@@ -69,6 +78,7 @@ in vec2 v_px;
 flat in vec4 v_par;
 flat in float v_I;
 flat in float v_pr;
+flat in float v_fade;
 uniform float u_time, u_bright, u_scale;
 out vec4 o;
 float h1(float x){ return fract(sin(x * 91.17 + v_par.z * 413.3) * 43758.5453); }
@@ -244,6 +254,7 @@ void main(){
   float pt = (1.0 - detail) * v_I * exp(-dot(v_px, v_px) / (1.1 * u_scale * u_scale));
   vec3 ptc = cls == 9 ? vec3(0.6, 0.8, 1.0) : cls == 10 ? vec3(0.9, 0.55, 1.0) : v_col;
   col += ptc * pt;
+  col *= v_fade;
   if (dot(col, col) < 1e-10) discard;
   o = vec4(max(col, vec3(0.0)), 0.0);
 }`;

@@ -255,13 +255,14 @@
         const snrTyp = cls !== 4 ? 0 : /^(m1|crab)/.test(o.id) || /Краб/.test(o.name) ? 2
           : /kepler|tycho|casa|cas_a|sn1987|sn1006|g1\.9/i.test(o.id) || /Кеплер|Тихо|Кассиопея|1987|1006/.test(o.name) ? 0 : 1;
         out.push(hi[0], hi[1], hi[2], p[0] - hi[0], p[1] - hi[1], p[2] - hi[2], nrm[0], nrm[1], nrm[2], col[0], col[1], col[2],
-          Math.max(o.radius, 1e-4), cls, snrTyp * 10 + h(), absM);
+          Math.max(o.radius, 1e-4), cls, snrTyp * 10 + h() + (o.est ? 100 : 0), absM);
         this.dsoList.push(o);
       }
       this.dsoBuf = this.glc.instanced(f32(out), [[1, 3], [2, 3], [3, 3], [4, 3], [5, 4]]);
     }
     // виден ли лёгкий объект каталога с текущей точки (для выбора кликом и подписей)
     dsoVisible(o, d) {
+      if (o.est && v3.len(this.cam.pos) > o.dist * 0.3) return false;   // положение условно — издали не показываем
       if (o.dsoAbs === undefined) return true;
       if (this.pxRadius(o.radius, d) > 4) return true;
       return o.dsoAbs + 5 * Math.log10(Math.max(d, 1e-12) / 32.6156) < this.dsoMagLim - 1.5;
@@ -519,15 +520,26 @@
           img.onload = () => {
             const gl = this.gl, t = gl.createTexture();
             const lin = /_(aux|nrm|mask)$/.test(id);
+            // 8K-карты (Земля) — только на «Ультра»; на слабых GPU/телефонах уменьшаем до 4K (память видеокарты)
+            const cap = Math.min(this.glc.maxTex, MW.QUALITY === 'ultra' ? 8192 : 4096);
+            let src = img;
+            if (img.width > cap) {
+              const cv = document.createElement('canvas');
+              cv.width = cap; cv.height = Math.max(1, Math.round(img.height * cap / img.width));
+              cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+              src = cv;
+            }
             gl.bindTexture(gl.TEXTURE_2D, t);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-            gl.texImage2D(gl.TEXTURE_2D, 0, lin ? gl.RGBA8 : gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+            gl.texImage2D(gl.TEXTURE_2D, 0, lin ? gl.RGBA8 : gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
             gl.generateMipmap(gl.TEXTURE_2D);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, img.height === 1 ? gl.CLAMP_TO_EDGE : gl.REPEAT);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            e.tex = t; e.w = img.width; e.state = 'ready'; e.ready = performance.now();
+            const an = gl.getExtension('EXT_texture_filter_anisotropic');
+            if (an) gl.texParameterf(gl.TEXTURE_2D, an.TEXTURE_MAX_ANISOTROPY_EXT, 8);   // чёткость карты у горизонта при посадке
+            e.tex = t; e.w = src.width; e.state = 'ready'; e.ready = performance.now();
             d.url = null;   // строка base64 больше не нужна — освобождаем память
           };
           img.onerror = () => { e.state = 'failed'; };
@@ -575,6 +587,9 @@
       const foot0 = Math.max(D - R, R * 1e-6) / (this.pxPerRad * R);
       p.set('u_oct', Math.round(MW.util.clamp(Math.max(Math.log2(Math.max(pr, 1) / 3) + 2, Math.log2(1 / foot0 / 3)), 3, 12)));
       p.set('u_bumpK', b.bump || td.bump || 0);
+      p.set('u_crater', b._crater ?? (b._crater = MW.craterFactor(b)));
+      // полярное сжатие быстро вращающихся гигантов (IAU): Сатурн 0,098, Юпитер 0,065, Уран 0,023, Нептун 0,017
+      p.set('u_flat', { saturn: 0.098, jupiter: 0.0649, uranus: 0.0229, neptune: 0.0171 }[b.id] || 0);
       // размер пикселя на поверхности (в долях радиуса): у самой поверхности угловой размер планеты
       // почти не растёт, а детализация должна — поэтому микрорельеф и шаг бампа считаются по нему
       const foot = Math.max(D - R, R * 1e-6) / (this.pxPerRad * R);

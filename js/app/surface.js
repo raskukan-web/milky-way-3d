@@ -49,7 +49,7 @@
     const earthLike = (k, clouds) => ({ bR: sc3(EARTH_R, k), bMs: [2.0e-5, 2.0e-5, 2.0e-5], bMa: [2.2e-6, 2.2e-6, 2.2e-6], bO: sc3(EARTH_O3, k), g: [0.76, 0.76, 0.76], HR: 8000, HM: 1200, top: 100000 });
     // ---- Солнечная система ----
     if (id === 'earth') {
-      Object.assign(P, { style: 2, relief: 3500, hill: 260, terr: [0, 0, 0.3, 0.8], terr2: [1, 0, 0, 1], wind: 9, aurora: true });
+      Object.assign(P, { style: 2, relief: 3500, hill: 260, terr: [0, 0, 0.12, 0.8], terr2: [1, 0, 0, 1], wind: 9, aurora: true });
       P.atm = earthLike(1); P.cloud = { cov: 0.42, alt: 2200, scale: 9000, col: [1, 1, 1] };
       P.notes.push('Азотно-кислородная атмосфера 1 бар: рэлеевское рассеяние окрашивает небо в голубой, на закате свет проходит ~40 толщ воздуха — остаются красные лучи; озон добавляет сумеречную синеву.');
     } else if (id === 'mars') {
@@ -145,6 +145,7 @@
       }
     }
     if (t === 15 && !P.atm) P.style = 8;
+    P.terr[0] = MW.craterFactor(b);     // кратеры — по той же планетологической оценке, что и с орбиты
     P.col1 = P.col1 && P.col1.length === 3 ? P.col1 : [0.4, 0.38, 0.36];
     // освещённость звездой: цвет фотосферы + «адаптация глаза» к потоку (как у дисков планет)
     const st = b.system.star;
@@ -694,7 +695,7 @@
       t.set('u_sunC', f32(sunC)); t.set('u_amb', f32(this._amb || [0, 0, 0]));
       t.set('u_upB', f32(n0)); t.set('u_parL', f32(parL)); t.set('u_parC', f32(parC));
       t.set('u_pixAng', 2 * r.tanHalf / r.height);
-      t.set('u_time', sc.realTime); t.set('u_micro', Tq.micro ?? 1);
+      t.set('u_time', sc.realTime); t.set('u_micro', Tq.micro ?? 1); t.set('u_microOct', Tq.microOct || 12);
       const sunUp = U.smoothstep(-0.05, 0.15, sunL[2]);
       t.set('u_ev', f32([p.frost, p.heat, 1, p.lava]));
       t.set('u_res', [r.width, r.height]);

@@ -80,13 +80,30 @@ vec3 cellNear(vec3 x, float per, float prob){
   }
   return vec3(best, id, rad);
 }
-// профиль кратера: d — расстояние в радиусах кратера (чаша + вал + выброс), в долях глубины
+// профиль кратера: d — расстояние в радиусах кратера (чаша + вал + выброс), в долях глубины; к d = 2,4 плавно → 0
 float craterP(float d){
   if (d > 2.4) return 0.0;
   float bowl = d < 1.0 ? (d * d - 1.0) : 0.0;
   float rim = exp(-pow((d - 1.0) / 0.22, 2.0)) * 0.28;
-  float ej = d > 1.0 ? 0.1 * exp(-(d - 1.0) * 2.2) : 0.0;
+  float ej = d > 1.0 ? 0.1 * exp(-(d - 1.0) * 2.2) * smoothstep(2.4, 1.5, d) : 0.0;
   return bowl + rim + ej;
+}
+// Поле кратеров: СУММА профилей всех соседних кратеров (× их радиус, в долях ячейки). Раньше брался только
+// ближайший — на границах ячеек высота скачком менялась на десятки метров («ступени» на горизонте).
+float craterSum(vec3 x, float per, float prob){
+  vec3 i = floor(x), f = x - i;
+  float h = 0.0;
+  for (int z = -1; z <= 1 + u_zero; z++) for (int y = -1; y <= 1; y++) for (int xx = -1; xx <= 1; xx++){
+    vec3 g = vec3(float(xx), float(y), float(z));
+    vec3 c = i + g;
+    float h0 = hl(c, per);
+    if (h0 > prob) continue;
+    vec3 o = vec3(hl(c + 17.0, per), hl(c + 41.0, per), hl(c + 73.0, per));
+    float rr = 0.12 + 0.3 * fract(h0 * 7.13 + o.x);
+    float d = length(g + 0.15 + 0.7 * o - f) / rr;
+    h += craterP(d) * rr;
+  }
+  return h;
 }
 
 // ---- крупный рельеф по направлению n (м); dx — шаг сетки, м (октавы мельче шага не добавляются) ----
@@ -132,9 +149,11 @@ float macroH(vec3 n, float dx){
   if (u_terr.x > 0.0){
     float cs = 80000.0;
     for (int i = 0; i < 3 + u_zero; i++){
-      if (cs < dx * 3.0) break;
-      vec3 c = cellNear(n * (R / cs) + u_SP * 3.0 + float(i) * 17.0, 0.0, 0.55 * u_terr.x);
-      if (c.x < 2.4) h += craterP(c.x) * c.z * cs * 0.22 * u_terr.x;
+      // плавно, а не обрывом, и только когда кратер покрыт несколькими вершинами: радиальный шаг сетки в ~4 раза
+      // крупнее окружного — иначе одиночные вершины давали тонкие «пунктирные» дуги вдоль колец
+      float wk = smoothstep(dx * 6.0, dx * 12.0, cs);
+      if (wk <= 0.0) break;
+      h += craterSum(n * (R / cs) + u_SP * 3.0 + float(i) * 17.0, 0.0, 0.55 * u_terr.x) * cs * 0.22 * u_terr.x * wk;
       cs *= 0.25;
     }
   }
@@ -167,9 +186,9 @@ float localH(vec3 loc, float dx){
   if (u_terr.x > 0.0){
     float cs = 512.0;
     for (int i = 0; i < 2 + u_zero; i++){
-      if (cs < dx * 3.0) break;
-      vec3 c = cellNear(loc / cs + float(i) * 5.0, PM / cs, 0.5 * u_terr.x);
-      if (c.x < 2.4) h += craterP(c.x) * c.z * cs * 0.2 * u_terr.x;
+      float wk = smoothstep(dx * 6.0, dx * 12.0, cs);
+      if (wk <= 0.0) break;
+      h += craterSum(loc / cs + float(i) * 5.0, PM / cs, 0.5 * u_terr.x) * cs * 0.2 * u_terr.x * wk;
       cs *= 0.125;
     }
   }
@@ -187,9 +206,11 @@ float localH(vec3 loc, float dx){
     h += (smoothstep(0.93, 0.985, rr) - 0.7 * smoothstep(0.985, 0.998, rr)) * 120.0 * u_terr2.z * wk;
   }
   // валуны (поперечник ~1–2 м)
-  if (u_terr.z > 0.0 && dx < 1.2){
+  if (u_terr.z > 0.0 && dx < 0.45){
+    // валун: гладкий неправильный купол (без резкого края — иначе он читается как кратер)
     vec3 c = cellNear(loc / 4.0, PM / 4.0, 0.35 * u_terr.z);
-    if (c.x < 1.0) h += sqrt(1.0 - c.x * c.x) * c.z * 4.0 * 0.7 * (1.0 - smoothstep(0.6, 1.2, dx));
+    float bd = c.x * (1.0 + 0.25 * pn(loc, 1.0).x);
+    if (bd < 1.0) h += pow(1.0 - bd * bd, 1.6) * c.z * 4.0 * 0.6 * (1.0 - smoothstep(0.2, 0.45, dx));
   }
   return h;
 }
@@ -291,19 +312,41 @@ uniform vec4 u_atm;             // x есть атмосфера, y радиус
 uniform mat3 u_b2l;             // система тела → локальная (E, N, U)
 out vec4 o;
 vec2 eqUV(vec3 n){ return vec2(atan(n.y, n.x) / 6.2831853 + 0.5, 0.5 - asin(clamp(n.z, -1.0, 1.0)) / 3.14159265); }
-// мелкие детали (м): только октавы крупнее пикселя (без мерцания)
+// Микрорельеф нормалями — от масштаба, который уже не передаёт сетка (~4 её шага; с высоты 250 км это километры),
+// до 2 пикселей (у ног — сантиметры). Скалы — ridged (острые гребни), лёд и песок — плавный шум; плюс малые кратеры
+// с сохранностью u_terr.x. Октав — по пресету (u_microOct), каждая гасится у предела разрешения (без мерцания).
+uniform int u_microOct;
 float microH(vec3 loc, float pix){
   float h = 0.0;
-  float lam = 4.0, amp = 0.09;
-  for (int i = 0; i < 7 + u_zero; i++){
-    if (lam < pix * 2.0) break;
-    h += pn(loc + 7.0, lam).x * amp * smoothstep(pix * 2.0, pix * 5.0, lam);
-    lam *= 0.5; amp *= 0.55;
+  float lam = exp2(clamp(ceil(log2(max(v_dx * 6.0, 0.25))), -3.0, 12.0));
+  float rough = (u_style == 2 || u_style == 6) ? 0.024 : (u_style == 3 || u_style == 9 || u_style == 5) ? 0.012 : 0.03;
+  bool smoothN = u_style == 3 || u_style == 9 || u_style == 5;
+  for (int i = 0; i < 18 + u_zero; i++){
+    if (i >= u_microOct || lam < pix * 2.0) break;
+    // верхняя граница — плавная (без «пунктирных» колец там, где меняется шаг сетки), нижняя — у предела пикселя
+    float w = smoothstep(pix * 2.5, pix * 7.0, lam) * (1.0 - smoothstep(v_dx * 3.0, v_dx * 6.0, lam));
+    float nz = pn(loc + 7.0, lam).x;
+    float v = smoothN ? nz : (1.0 - abs(nz)) * 1.4 - 0.75;
+    h += v * lam * rough * w;
+    lam *= 0.5;
+  }
+  // малые кратеры: сотни метров → десятки сантиметров (только у тел, где они сохраняются)
+  if (u_terr.x > 0.01){
+    float cs = 512.0;
+    for (int i = 0; i < 4 + u_zero; i++){
+      if (cs < pix * 6.0) break;
+      // дополнение к кратерам сетки: что сетка не берёт (вес 1 − smoothstep(6dx, 12dx)), рисуется нормалями
+      float wc = (1.0 - smoothstep(v_dx * 6.0, v_dx * 12.0, cs)) * smoothstep(pix * 6.0, pix * 15.0, cs);
+      if (wc > 0.0){
+        h += craterSum(loc / cs + float(i) * 5.0, PM / cs, 0.5 * u_terr.x) * cs * 0.2 * u_terr.x * wc;   // те же кратеры, что у сетки
+      }
+      cs *= 0.125;
+    }
   }
   // камешки
   if (u_terr.z > 0.0 && pix < 0.05){
     vec3 c = cellNear(loc / 0.5 + 3.0, PM / 0.5, 0.45 * u_terr.z);
-    if (c.x < 1.0) h += sqrt(1.0 - c.x * c.x) * c.z * 0.6 * 0.5 * smoothstep(0.05, 0.015, pix);
+    if (c.x < 1.0) h += pow(1.0 - c.x * c.x, 1.6) * c.z * 0.6 * 0.5 * smoothstep(0.05, 0.015, pix);
   }
   // рябь песка
   if (u_terr.y > 0.0 && pix < 0.08){
@@ -326,7 +369,16 @@ void main(){
     alb = mix(alb, tc, u_texP.x);
   }
   float dn1 = pn(v_loc, 32.0).x, dn2 = pn(v_loc + 11.0, 4.0).x;
-  alb *= 1.0 + 0.22 * dn1 + 0.14 * dn2 * smoothstep(8.0 * pix, 2.0 * pix, 1.0);
+  {
+    float texM = u_texP.x > 0.0 ? 6.2831853 * u_R / u_texP.y : 4096.0;
+    float la = exp2(clamp(ceil(log2(texM)), 0.0, 14.0)), ad = 0.0, aw = 0.5;
+    for (int i = 0; i < 18 + u_zero; i++){
+      if (i >= u_microOct || la < pix * 3.0) break;
+      ad += pn(v_loc + 31.0, la).x * aw * smoothstep(pix * 3.0, pix * 8.0, la);
+      la *= 0.5; aw *= 0.8;
+    }
+    alb *= clamp(1.0 + 0.32 * ad, 0.45, 1.6);
+  }
   vec3 N = normalize(v_N);
   float spec = 0.0, rough = 0.6;
   vec3 emis = vec3(0.0);
