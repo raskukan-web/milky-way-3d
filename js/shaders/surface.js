@@ -795,7 +795,9 @@ void main(){
   vec4 Ta = texture(u_skyT, v_uv);
   vec3 T = Ta.rgb * Ta.a, In = texture(u_skyIn, v_uv).rgb;
   float l = dot(s, vec3(0.2126, 0.7152, 0.0722));
-  float veil = mix(u_veil, 1.0, smoothstep(1.5, 12.0, l));     // днём тусклые звёзды тонут в свете неба, звезда — нет
+  // днём тусклые звёзды тонут в свете неба, звезда — нет. Порог высокий: яркие спрайты звёзд и скоплений
+  // (Плеяды и т. п.) иначе проступали россыпью точек на голубом дневном небе
+  float veil = mix(u_veil, 1.0, smoothstep(40.0, 400.0, l));
   o = vec4(s * T * veil + In, 1.0);
 }`;
 

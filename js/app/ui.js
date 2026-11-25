@@ -866,6 +866,12 @@
         const rel = v3.sub(b.pos, cam.pos), d = v3.len(rel);
         if (r.pxRadius(b.radius, d) > 3) occl.push({ rel, r2: b.radius * b.radius, d });
       }
+      // крупный вблизи аккреционный диск рентгеновской двойной закрывает подписи далёкого фона (Лебедь A за Лебедем X-1)
+      const xrbNear = [];
+      for (const o of sc.catalog.dsos) if (o.dsoCls === 13) {
+        const rel = v3.sub(o.pos, cam.pos), d = v3.len(rel);
+        if (r.pxRadius(o.radius, d) > 40) { occl.push({ rel, r2: Math.pow(o.radius * 0.72, 2), d }); xrbNear.push(o); }
+      }
       // перекрыт ли луч камера→точка сферой близкого тела (проверка в 3D, работает и у поверхности)
       const hidden = (pos) => {
         const dv = v3.sub(pos, cam.pos), L = v3.len(dv);
@@ -880,7 +886,7 @@
         if (!opts.force && text === selName) return null;
         const p = r.project(pos);
         if (!p || !p.onScreen) return null;
-        if (occl.length && hidden(pos)) return null;
+        if (occl.length && !opts.noOcc && hidden(pos)) return null;
         // на поверхности: объекты под местным горизонтом не подписываем
         if (this._surfUp && v3.dot(v3.sub(pos, cam.pos), this._surfUp) < -0.01 * v3.dist(pos, cam.pos)) return null;
         // на поверхности (днём и ночью) небо подписывается только светилами своей системы: звезда, луны, соседние
@@ -941,13 +947,17 @@
           label(sys.star.name, sys.star.pos, '#ffe9a8', { bold: true, obj: sys.star });
           for (const b of sys.bodies) {
             if (this.app.surface.active && b === this.app.surface.body) continue;
+            // днём на поверхности в голубом/рыжем небе точечные планеты не видны (Плутон, Нептун, Венера-«точка»):
+            // подписываем только тела с заметным диском — например, планету-гигант над спутником
+            if (this._surfDay && r.pxRadius(b.radius, v3.dist(cam.pos, b.pos)) < 2) continue;
             if (b.kind === 'moon') { const dp = v3.dist(cam.pos, b.parentBody.pos); if (dp > b.parentBody.radius * 400) continue; }
             label(b.name, b.pos, b.kind === 'moon' ? '#a9b4c8' : '#cfe0ff', { size: b.kind === 'moon' ? 11 : 12, obj: b });
           }
         } else if (!sys.isSolar && galFade(dSys) > 0.02) label(sys.star.name, sys.star.pos, '#ffe9a8', { alpha: galFade(dSys), obj: sys.star });
       }
       if (sunD >= 3000 * MW.C.AU_LY) label('☉ Солнце', [0, 0, 0], '#ffe27a', { bold: true });
-      if (sunD < 20000 * MW.C.AU_LY) for (const pr of sc.probes) label(pr.name, pr.pos, MW.color.hex(pr.color), { size: 12, bold: true });
+      // аппараты в сотнях а. е. с поверхности не видны — не подписываем
+      if (sunD < 20000 * MW.C.AU_LY && !this._surfUp) for (const pr of sc.probes) label(pr.name, pr.pos, MW.color.hex(pr.color), { size: 12, bold: true });
       // звёзды каталога
       const lim = sunD < 200 ? 2.3 : 3.3;
       for (const s of sc.catalog.stars) {
@@ -1000,6 +1010,13 @@
         if (o.supercluster) gf *= U.smoothstep(5e6, 6.5e6, dGC);
         if (gf <= 0.02) continue;
         label(o.name, o.pos, { nebula: '#ff9ab0', snr: '#ffb27a', planetary: '#7af0d0', globular: '#ffe4a8', cluster: '#a8c8ff', galaxy: '#d8c8ff', pulsar: '#8fd4ff', quasar: '#9fc0ff', galcluster: '#ffd9a0', xray: '#b6c8ff' }[o.vis] || '#ddd', { size: 11, bold: landmark, alpha: gf, obj: o });
+      }
+      // компоненты двойной вблизи: чёрная дыра в центре диска и голубой сверхгигант-компаньон (та же точка, что в
+      // шейдере: 0,85 R вдоль оси T плоскости диска) — отдельные подписи, не наложенные друг на друга
+      for (const o of xrbNear) {
+        const N = v3.norm(o.dsoNrm || [0, 0, 1]);
+        const T = v3.norm(v3.cross(N, Math.abs(N[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0]));
+        label(o.id === 'cygx1' ? 'HDE 226868 · голубой сверхгигант' : 'Звезда-компаньон', v3.madd(o.pos, T, o.radius * 0.85), '#cfe0ff', { size: 11, noOcc: true });
       }
       label('Стрелец A*', sc.bh.pos, '#ffb060', { bold: v3.dist(cam.pos, sc.bh.pos) < 2000 });
     }

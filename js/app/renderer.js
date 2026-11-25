@@ -300,7 +300,7 @@
         let nrm = o.normal || v3.norm([h.gauss(), h.gauss(), h.gauss()]);
         if (cls <= 2) nrm = this.galMorph(o, nrm);
         const absM = o.mag !== null && o.mag !== undefined && o.dist ? o.mag - 5 * Math.log10(o.dist / 32.6156) : ABS[cls];
-        o.dsoCls = cls; o.dsoAbs = absM;
+        o.dsoCls = cls; o.dsoAbs = absM; o.dsoNrm = nrm;   // ориентация модели (диск двойной, плоскость галактики) — для подписей
         let col = COL[cls] || [1, 1, 1];
         if (cls === 9 || cls === 10) col = [0, Math.min(1 / o.period, 2.5), 0];    // видимая частота вращения пучков
         const p = o.pos, hi = [Math.fround(p[0]), Math.fround(p[1]), Math.fround(p[2])];
@@ -481,7 +481,10 @@
       if (this.s.orbits && !(this.surface && this.surface.active)) {
         // рядом с крупным телом прочие орбиты приглушаются
         const anc = this.cam.anchor;
-        const near = anc ? 1 - 0.75 * MW.util.smoothstep(40, 200, this.pxRadius(anc.radius, v3.dist(cam, anc.pos))) : 1;
+        // (когда тело заполняет кадр — почти полностью: из плоскости эклиптики орбиты видны с ребра и пучком
+        // почти вертикальных линий сходятся к узлам над лимбом)
+        const pxA = anc ? this.pxRadius(anc.radius, v3.dist(cam, anc.pos)) : 0;
+        const near = anc ? (1 - 0.75 * MW.util.smoothstep(40, 200, pxA)) * (1 - 0.8 * MW.util.smoothstep(300, 900, pxA)) : 1;
         for (const sys of this.scene.systems) for (const b of sys.bodies) {
           if (this.surface && this.surface.active && b === this.surface.body) continue;
           const center = b.parentBody ? b.parentBody.pos : sys.star.pos;
@@ -505,7 +508,8 @@
         }
       }
       // пройденные траектории «Вояджеров»: Земля → Юпитер → Сатурн (→ Уран → Нептун) → межзвёздное пространство
-      if (this.s.orbits) {
+      // (с поверхности и из атмосферы не рисуются — как и орбиты: тонкая линия поперёк неба над горизонтом)
+      if (this.s.orbits && !sfA) {
         const a = 0.75 * (1 - MW.util.smoothstep(3000 * AU, 30000 * AU, sunD));
         if (a > 0.01) for (const pr of this.scene.probes) {
           const pts = MW.probes.path(pr, this.scene.jd, 400);
@@ -1174,7 +1178,10 @@
         for (let i = 0; i < 32 * 18; i++) { lg += px[i * 4] / 255 * 22 - 16; br += px[i * 4 + 1] / 255; }
         lg /= 32 * 18; br /= 32 * 18;
         this.stats.lumLog = lg; this.stats.brightFrac = br;
-        const key = MW.util.clamp(Math.pow(2, (this.expKeyLog ?? -6.5) - lg), 0.05, 50);
+        // ключ экспозиции: для космоса −6,5; на поверхности днём средняя яркость кадра на 3–4 порядка выше, и
+        // с космическим ключом экспозиция упиралась в нижний предел — полуденное небо выходило сумеречно-бирюзовым
+        const sfOn = this.surface && this.surface.active;
+        const key = MW.util.clamp(Math.pow(2, (this.expKeyLog ?? (sfOn ? -3.2 : -6.5)) - lg), 0.05, 50);
         // Солнце/яркая звезда в кадре занимает доли процента площади — экспозицию снижаем и по яркости источника
         this.expTarget = MW.util.clamp(Math.pow(key, 0.3), 0.62, 1.4) / (1 + 6 * br) / (1 + 0.15 * Math.log2(1 + Math.max(0, (this.surface && this.surface.active ? 0 : this.lensPeak || 0) - 8) / 2));   // яркие звёзды неба (Сириус ~10) не в счёт
         this.glc.bindTarget(target);
