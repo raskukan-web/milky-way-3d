@@ -36,6 +36,11 @@ uniform vec3 u_sunB;        // направление на звезду (сис�
 uniform vec3 u_windB;       // направление ветра/дюн (касательное)
 uniform sampler2D u_aux;    // служебная карта (у Земли g — океаны)
 uniform float u_auxK;
+/* Точность float32 (Relative-to-Eye). Локальные метровые координаты шума разбиты на две части: старшая u_locHi —
+   кратна 512 м и одна на кадр (меняется, лишь когда наблюдатель уходит на 512 м), младшая (loc, v_loc) — малое
+   смещение от неё, посчитанное на CPU в Float64. Номер ячейки шума = u_locHi/λ + floor(loc/λ) — точное целое,
+   поэтому мелкий рельеф (камни, рябь, валуны) не «дрожит» на миллиметры от округления больших координат. */
+uniform vec3 u_locHi;
 
 // ---- хэш решётки и периодический value-шум с аналитическими производными ----
 uint hu3(uvec3 v){
@@ -51,8 +56,7 @@ float hl(vec3 c, float per){
 }
 const float PM = 65536.0;   // период локальных координат шума, м
 // x — значение (−1..1), yzw — градиент по x
-vec4 vnoiseD(vec3 x, float per){
-  vec3 i = floor(x), f = x - i;
+vec4 vnoiseDs(vec3 i, vec3 f, float per){
   vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
   vec3 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
   float a = hl(i, per), b = hl(i + vec3(1, 0, 0), per), c = hl(i + vec3(0, 1, 0), per), d = hl(i + vec3(1, 1, 0), per);
@@ -62,11 +66,20 @@ vec4 vnoiseD(vec3 x, float per){
   vec3 gr = du * vec3(k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z, k2 + k5 * u.z + k4 * u.x + k7 * u.z * u.x, k3 + k6 * u.x + k5 * u.y + k7 * u.x * u.y);
   return vec4(v * 2.0 - 1.0, gr * 2.0);
 }
-// периодический шум с длиной волны lam (м, степень двойки)
-vec4 pn(vec3 loc, float lam){ return vnoiseD(loc / lam, PM / lam); }
-// ближайшая точка ячеистого шума: x — расстояние (в долях ячейки), y — хэш ячейки, z — радиус объекта
-vec3 cellNear(vec3 x, float per, float prob){
-  vec3 i = floor(x), f = x - i;
+vec4 vnoiseD(vec3 x, float per){ vec3 i = floor(x); return vnoiseDs(i, x - i, per); }
+// локальная точка (u_locHi + l) в ячейках размера s (степень двойки): целая часть xi и остаток xr (x = xi + xr)
+void lsplit(vec3 l, float s, out vec3 xi, out vec3 xr){
+  if (s <= 512.0){ xi = u_locHi / s; xr = l / s; } else { xi = vec3(0.0); xr = (u_locHi + l) / s; }
+}
+// периодический шум с длиной волны lam (м, степень двойки) в локальной точке l
+vec4 pn(vec3 l, float lam){
+  vec3 xi, xr; lsplit(l, lam, xi, xr);
+  vec3 fl = floor(xr);
+  return vnoiseDs(xi + fl, xr - fl, PM / lam);
+}
+// ближайшая точка ячеистого шума: x = xi + xr (xi — целые), расстояние (в долях ячейки), хэш ячейки, радиус объекта
+vec3 cellNearS(vec3 xi, vec3 xr, float per, float prob){
+  vec3 fl = floor(xr), i = xi + fl, f = xr - fl;
   float best = 9.0, id = 0.0, rad = 0.0;
   for (int z = -1; z <= 1 + u_zero; z++) for (int y = -1; y <= 1; y++) for (int xx = -1; xx <= 1; xx++){
     vec3 g = vec3(float(xx), float(y), float(z));
@@ -81,6 +94,7 @@ vec3 cellNear(vec3 x, float per, float prob){
   }
   return vec3(best, id, rad);
 }
+vec3 cellNear(vec3 x, float per, float prob){ return cellNearS(vec3(0.0), x, per, prob); }
 // профиль кратера: d — расстояние в радиусах кратера (чаша + вал + выброс), в долях глубины; к d = 2,4 плавно → 0
 float craterP(float d){
   if (d > 2.4) return 0.0;
@@ -91,8 +105,8 @@ float craterP(float d){
 }
 // Поле кратеров: СУММА профилей всех соседних кратеров (× их радиус, в долях ячейки). Раньше брался только
 // ближайший — на границах ячеек высота скачком менялась на десятки метров («ступени» на горизонте).
-float craterSum(vec3 x, float per, float prob){
-  vec3 i = floor(x), f = x - i;
+float craterSumS(vec3 xi, vec3 xr, float per, float prob){
+  vec3 fl = floor(xr), i = xi + fl, f = xr - fl;
   float h = 0.0;
   for (int z = -1; z <= 1 + u_zero; z++) for (int y = -1; y <= 1; y++) for (int xx = -1; xx <= 1; xx++){
     vec3 g = vec3(float(xx), float(y), float(z));
@@ -106,6 +120,9 @@ float craterSum(vec3 x, float per, float prob){
   }
   return h;
 }
+float craterSum(vec3 x, float per, float prob){ return craterSumS(vec3(0.0), x, per, prob); }
+// кратеры в локальной точке l (ячейка cs, сдвиг сида sh)
+float craterL(vec3 l, float cs, float sh, float prob){ vec3 xi, xr; lsplit(l, cs, xi, xr); return craterSumS(xi, xr + sh, PM / cs, prob); }
 
 // ---- крупный рельеф по направлению n (м); dx — шаг сетки, м (октавы мельче шага не добавляются) ----
 float landMask(vec3 n){
@@ -189,13 +206,13 @@ float localH(vec3 loc, float dx){
     for (int i = 0; i < 2 + u_zero; i++){
       float wk = smoothstep(dx * 6.0, dx * 12.0, cs);
       if (wk <= 0.0) break;
-      h += craterSum(loc / cs + float(i) * 5.0, PM / cs, 0.5 * u_terr.x) * cs * 0.2 * u_terr.x * wk;
+      h += craterL(loc, cs, float(i) * 5.0, 0.5 * u_terr.x) * cs * 0.2 * u_terr.x * wk;
       cs *= 0.125;
     }
   }
   // дюны: поперечные гряды вдоль ветра, гребни слегка извилистые
   if (u_terr.y > 0.0 && dx < 10.0){
-    float ph = dot(loc, u_windB) / 46.0 + 0.6 * pn(loc, 256.0).x + 0.25 * pn(loc, 64.0).x;
+    float ph = (dot(u_locHi, u_windB) + dot(loc, u_windB)) / 46.0 + 0.6 * pn(loc, 256.0).x + 0.25 * pn(loc, 64.0).x;
     float dune = pow(1.0 - abs(sin(ph * 3.14159)), 1.6);
     float field = smoothstep(-0.2, 0.4, pn(loc + 3000.0, 1024.0).x);
     h += dune * 4.0 * u_terr.y * field * (1.0 - smoothstep(5.0, 10.0, dx));   // ≥ 9 узлов на волну дюны
@@ -210,7 +227,8 @@ float localH(vec3 loc, float dx){
   // (решётка у ног — 0,5 м, фильтр октав 0,75 м: валуны берутся в рельеф и у сетки, и у запроса высоты)
   if (u_terr.z > 0.0 && dx < 1.2){
     // валун: гладкий неправильный купол (без резкого края — иначе он читается как кратер)
-    vec3 c = cellNear(loc / 4.0, PM / 4.0, 0.35 * u_terr.z);
+    vec3 bxi, bxr; lsplit(loc, 4.0, bxi, bxr);
+    vec3 c = cellNearS(bxi, bxr, PM / 4.0, 0.35 * u_terr.z);
     float bd = c.x * (1.0 + 0.25 * pn(loc, 1.0).x);
     if (bd < 1.0) h += pow(1.0 - bd * bd, 1.6) * c.z * 4.0 * 0.6 * (1.0 - smoothstep(0.6, 1.2, dx));
   }
@@ -231,7 +249,8 @@ layout(location=0) in vec2 a_grid;      // x — номер кольца, y — 
 uniform float u_NR, u_NA, u_s1, u_c;    // кольца: s(j) = s1·(e^(c·j) − 1)/c — у ног шаг s1, дальше плавный рост
 uniform vec3 u_n0, u_E, u_Nn;           // базис в точке под камерой (система тела)
 uniform float u_camAlt;                 // высота камеры над уровнем R, м
-uniform vec3 u_pmod;                    // точка под камерой в локальных координатах шума (м, по модулю PM)
+uniform vec3 u_pmod;                    // точка под камерой: младшая часть локальных координат шума (м), см. u_locHi
+uniform vec3 u_anc, u_n0a;              // якорь — направление, неподвижное на планете (сменяется раз в ~2 км), и n0 − якорь (Float64 на CPU)
 uniform vec4 u_faceC[6];                // камера в карте каждой грани куба, м: xy — по модулю 4096, zw — по модулю 2^24
 uniform mat3 u_b2v;                     // система тела → система камеры (вид)
 uniform mat4 u_proj;
@@ -270,7 +289,10 @@ void main(){
   float ang = s / u_R;
   float s2 = sin(ang * 0.5);
   vec3 dn = -2.0 * s2 * s2 * u_n0 + sin(ang) * dir;     // n − n0 без потери точности у ног
-  vec3 n = normalize(u_n0 + dn);
+  // направление на точку — от якоря, неподвижного на планете: u_anc + (n0 − якорь + dn). Сумма округляется
+  // одинаково в каждом кадре (её малая часть — смещение точки от якоря), поэтому крупный рельеф в узлах не
+  // «дышит» на сантиметры от округления float32, пока наблюдатель идёт
+  vec3 n = normalize(u_anc + (u_n0a + dn));
   vec3 loc = u_pmod + u_R * dn;
   // шаг сетки (м): по радиусу и по окружности
   float dxm = max(u_s1 + u_c * s, s * 6.2831853 / u_NA);
@@ -334,7 +356,7 @@ void main(){
       } else {
         dnC = fromF(normalize(vec3((i0 + ab) * q / u_R, 1.0)), f) - u_n0;
       }
-      nn = normalize(u_n0 + dnC); ll = u_pmod + u_R * dnC;
+      nn = normalize(u_anc + (u_n0a + dnC)); ll = u_pmod + u_R * dnC;
       dd = 1.5 * q * J;                       // фильтр октав — по уровню решётки: узел одинаков для всех вершин
     }
     else if (i == 9){ nn = normalize(n + t1 * (eM / u_R)); ll = loc + t1 * eL; }
@@ -414,19 +436,20 @@ float microH(vec3 loc, float pix){
       // дополнение к кратерам сетки: что сетка не берёт (вес 1 − smoothstep(6dx, 12dx)), рисуется нормалями
       float wc = (1.0 - smoothstep(v_dx * 6.0, v_dx * 12.0, cs)) * smoothstep(pix * 6.0, pix * 15.0, cs);
       if (wc > 0.0){
-        h += craterSum(loc / cs + float(i) * 5.0, PM / cs, 0.5 * u_terr.x) * cs * 0.2 * u_terr.x * wc;   // те же кратеры, что у сетки
+        h += craterL(loc, cs, float(i) * 5.0, 0.5 * u_terr.x) * cs * 0.2 * u_terr.x * wc;   // те же кратеры, что у сетки
       }
       cs *= 0.125;
     }
   }
   // камешки
   if (u_terr.z > 0.0 && pix < 0.05){
-    vec3 c = cellNear(loc / 0.5 + 3.0, PM / 0.5, 0.45 * u_terr.z);
+    vec3 pxi, pxr; lsplit(loc, 0.5, pxi, pxr);
+    vec3 c = cellNearS(pxi, pxr + 3.0, PM / 0.5, 0.45 * u_terr.z);
     if (c.x < 1.0) h += pow(1.0 - c.x * c.x, 1.6) * c.z * 0.6 * 0.5 * smoothstep(0.05, 0.015, pix);
   }
   // рябь песка
   if (u_terr.y > 0.0 && pix < 0.08){
-    float ph = dot(loc, u_windB) / 0.35 + 2.0 * pn(loc, 2.0).x;
+    float ph = (dot(u_locHi, u_windB) + dot(loc, u_windB)) / 0.35 + 2.0 * pn(loc, 2.0).x;
     h += 0.012 * u_terr.y * sin(ph * 6.2831853) * smoothstep(0.08, 0.02, pix);
   }
   return h * u_micro;
@@ -495,8 +518,8 @@ void main(){
   } else if (u_style == 7 || u_style == 8){   // раскалённые каменные и лавовые миры
     float sub = dot(n, u_sunB);
     vec3 w1 = vec3(pn(v_loc, 256.0).x, pn(v_loc + 1300.0, 256.0).x, pn(v_loc + 2300.0, 256.0).x);
-    vec3 q = v_loc / 128.0 + w1 * 1.3;
-    float r1 = 1.0 - abs(vnoiseD(q, PM / 128.0).x); float r2 = 1.0 - abs(vnoiseD(q * 2.0 + 4.0, PM / 64.0).x);
+    vec3 qr = v_loc / 128.0 + w1 * 1.3, qi = u_locHi / 128.0, qf = floor(qr), qr2 = v_loc / 64.0 + w1 * 2.6 + 4.0, qf2 = floor(qr2);
+    float r1 = 1.0 - abs(vnoiseDs(qi + qf, qr - qf, PM / 128.0).x); float r2 = 1.0 - abs(vnoiseDs(qi * 2.0 + qf2, qr2 - qf2, PM / 64.0).x);
     float rid = r1 * r1 * 0.65 + r2 * r2 * 0.35 * r1;
     float wdt = 0.04 + 0.05 * (pn(v_loc, 512.0).x * 0.5 + 0.5);
     float fis = smoothstep(1.0 - wdt, 1.0 - wdt * 0.3, rid);
@@ -505,7 +528,7 @@ void main(){
     alb = mix(vec3(0.035, 0.032, 0.03), vec3(0.1, 0.09, 0.08), smoothstep(-0.5, 0.6, dn1));
     alb = mix(alb, vec3(0.16, 0.05, 0.03), cool * 0.7 * step(0.01, heat));
     float lake = u_terr2.y > 0.0 ? smoothstep(u_terr2.y - 0.012, u_terr2.y + 0.01, sub + 0.03 * fbm(n * 30.0 + u_SP, 3)) : 0.0;
-    float flick = 0.85 + 0.15 * sin(u_time * 1.3 + dot(v_loc, vec3(0.05)));
+    float flick = 0.85 + 0.15 * sin(u_time * 1.3 + dot(u_locHi + v_loc, vec3(0.05)));
     emis += vec3(1.0, 0.3, 0.05) * fis * 1.4 * heat * flick * smoothstep(40.0, 4.0, pix * 3.0 / max(wdt, 0.02));
     emis += vec3(0.55, 0.09, 0.03) * cool * 0.25 * heat;
     if (lake > 0.0){
@@ -550,7 +573,7 @@ void main(){
   }
   // иней: блёстки отдельных кристаллов
   if (u_ev.x > 0.0 && pix < 0.2){
-    vec3 cc = floor(v_loc / 0.0625);
+    vec3 cc = u_locHi / 0.0625 + floor(v_loc / 0.0625);
     float hh = hl(cc, PM / 0.0625);
     vec3 fn = normalize(N + 0.6 * (vec3(hl(cc + 3.0, PM / 0.0625), hl(cc + 7.0, PM / 0.0625), hl(cc + 11.0, PM / 0.0625)) - 0.5));
     float gl = pow(max(dot(fn, Hh), 0.0), 900.0) * step(0.93, hh);
@@ -574,9 +597,16 @@ void main(){
   o = vec4(col, 1.0);
 }`;
 
+  // ---------- копия кадра (фон под ландшафтом в мультисэмпловом буфере) ----------
+  G.surfCopyFS = G.header + `
+in vec2 v_uv;
+uniform sampler2D u_src;
+out vec4 o;
+void main(){ o = texture(u_src, v_uv); }`;
+
   // ---------- запрос высоты рельефа под камерой (для «приземления» на высоту глаз) ----------
   G.terrQueryFS = G.header + G.noise + G.surfCommon + `
-uniform vec3 u_n0, u_pmod, u_sunTan;
+uniform vec3 u_n0, u_pmod, u_sunTan, u_anc, u_n0a;
 out vec4 o;
 // пиксель 0 — высота под камерой; 1…7 — профиль рельефа к звезде (30 м … 120 км): закрыта ли она горами
 void main(){
@@ -585,7 +615,7 @@ void main(){
   float a = d / u_R, s2 = sin(a * 0.5);
   vec3 dn = -2.0 * s2 * s2 * u_n0 + sin(a) * u_sunTan;
   // под камерой — тот же фильтр октав, что у узлов решётки у ног (0,75 м): наблюдатель идёт ровно по видимой земле
-  float h = Hfull(normalize(u_n0 + dn), u_pmod + u_R * dn, i == 0 ? 0.75 : max(0.75, d * 0.05));
+  float h = Hfull(normalize(u_anc + (u_n0a + dn)), u_pmod + u_R * dn, i == 0 ? 0.75 : max(0.75, d * 0.05));
   o = vec4(h, 0.0, 0.0, 1.0);
 }`;
 

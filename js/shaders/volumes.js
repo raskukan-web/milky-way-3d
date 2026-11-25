@@ -377,10 +377,15 @@ void main(){
   o = vec4(s / 16.0, 1.0);
 }`;
 
+  /* Финальный композитинг: bloom, экспозиция, виньетка, ACES (+ художественная палитра), затем FXAA.
+     FXAA («лёгкий», по Лоттсу) работает по уже тонированной яркости: 4 диагональных соседа задают направление
+     края, вдоль него берутся 2–4 пробы. Резкость сохраняется: на плоских участках проход выключен, а
+     одиночный яркий пиксель (звезда) не размывается — он остаётся как есть. Подписи — HTML-слой поверх, их это
+     не касается. u_fxaa = 0 выключает сглаживание. */
   G.compositeFS = G.header + `
 in vec2 v_uv;
 uniform sampler2D u_scene, u_bloom;
-uniform float u_bloomStr, u_exposure, u_time, u_vignette, u_art;
+uniform float u_bloomStr, u_exposure, u_time, u_vignette, u_art, u_fxaa;
 out vec4 o;
 vec3 aces(vec3 x){
   const mat3 m1 = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
@@ -390,12 +395,13 @@ vec3 aces(vec3 x){
   vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
   return clamp(m2 * (a / b), 0.0, 1.0);
 }
-void main(){
-  vec3 c = texture(u_scene, v_uv).rgb;
-  vec3 bl = texture(u_bloom, v_uv).rgb;
+// тонированный цвет в точке uv (линейный, до гаммы)
+vec3 tmAt(vec2 uv){
+  vec3 c = texture(u_scene, uv).rgb;
+  vec3 bl = texture(u_bloom, uv).rgb;
   c = c + bl * u_bloomStr;
   c *= u_exposure;
-  vec2 q = v_uv - 0.5;
+  vec2 q = uv - 0.5;
   c *= 1.0 - u_vignette * dot(q, q) * 1.6;
   vec3 tm = aces(c);
   if (u_art > 0.5){
@@ -409,7 +415,33 @@ void main(){
     float tl = dot(tm, vec3(0.2126, 0.7152, 0.0722));
     tm = max(mix(vec3(tl), tm, 1.12), 0.0);
   }
-  c = tm;
+  return tm;
+}
+float lumaOf(vec3 c){ return sqrt(dot(c, vec3(0.299, 0.587, 0.114))); }   // перцептивная яркость (≈ после гаммы)
+void main(){
+  vec3 rgbM = tmAt(v_uv);
+  vec3 c = rgbM;
+  if (u_fxaa > 0.5){
+    vec2 px = 1.0 / vec2(textureSize(u_scene, 0));
+    float lM = lumaOf(rgbM);
+    float lNW = lumaOf(tmAt(v_uv + vec2(-1.0, -1.0) * px)), lNE = lumaOf(tmAt(v_uv + vec2(1.0, -1.0) * px));
+    float lSW = lumaOf(tmAt(v_uv + vec2(-1.0, 1.0) * px)), lSE = lumaOf(tmAt(v_uv + vec2(1.0, 1.0) * px));
+    float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    float lNbMax = max(max(lNW, lNE), max(lSW, lSE));
+    // плоский участок — без сглаживания; одиночный яркий пиксель (звезда) — тоже
+    bool star = lM > lNbMax * 1.35 + 0.04;
+    if (lMax - lMin > max(0.045, lMax * 0.14) && !star){
+      vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
+      float red = max((lNW + lNE + lSW + lSE) * 0.25 * 0.125, 1.0 / 128.0);
+      float rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + red);
+      dir = clamp(dir * rcp, vec2(-8.0), vec2(8.0)) * px;
+      vec3 rgbA = 0.5 * (tmAt(v_uv + dir * (1.0 / 3.0 - 0.5)) + tmAt(v_uv + dir * (2.0 / 3.0 - 0.5)));
+      vec3 rgbB = rgbA * 0.5 + 0.25 * (tmAt(v_uv - dir * 0.5) + tmAt(v_uv + dir * 0.5));
+      float lB = lumaOf(rgbB);
+      c = (lB < lMin || lB > lMax) ? rgbA : rgbB;
+    }
+  }
   c = pow(c, vec3(1.0 / 2.2));
   float n = fract(sin(dot(gl_FragCoord.xy + fract(u_time) * 61.0, vec2(12.9898, 78.233))) * 43758.5453);
   c += (n - 0.5) / 255.0;

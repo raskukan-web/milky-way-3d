@@ -922,6 +922,18 @@
       const GAL_IN = new Set(['nebula', 'snr', 'planetary', 'cluster', 'globular', 'pulsar', 'xray']);
       const galFade = (d) => 1 - U.smoothstep(12000, 20000, d);
       const dGC = v3.dist(cam.pos, MW.C.GC_POS);
+      // Подписи рукавов — первыми (приоритет при разнесении): каждая не ближе ~110 px к другой и к центру диска,
+      // одноимённый рукав — не ближе 260 px; когда Галактика мала на экране — без подписей рукавов
+      if (sunD > 6000 && r.pxRadius(50000, Math.max(dGC, 1)) > 110) {
+        const gcP = r.project(MW.C.GC_POS), placed = [];
+        for (const a of MW.galaxy.armLabels()) {
+          const p = r.project(a.pos);
+          if (!p || !p.onScreen) continue;
+          if (gcP && gcP.onScreen && Math.hypot(p.x - gcP.x, p.y - gcP.y) < 80) continue;
+          if (placed.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < (q.name === a.name ? 260 : 110))) continue;
+          if (label(a.name, a.pos, 'rgba(170,200,255,0.8)', { size: 12, center: true })) placed.push({ x: p.x, y: p.y, name: a.name });
+        }
+      }
       // тела систем
       for (const sys of sc.systems) {
         const dSys = v3.dist(cam.pos, sys.star.pos);
@@ -972,6 +984,9 @@
         const landmark = o.vis === 'quasar' || o.vis === 'galcluster' || o.vis === 'xray' || (o.vis === 'snr' && o.lite && !o.ngc);
         if (o.vis === 'pulsar' && (o.lite ? dO > Math.max(40, o.radius * 4000) : dO > 3000)) continue;
         if (!landmark && (o.vis === 'globular' || o.vis === 'planetary' || o.vis === 'snr') && dO > 40000 && o !== (this.selected && this.selected.obj)) continue;
+        // в масштабе Местной группы (камера вне диска, но ближе 5 млн св. лет к центру) далёкие галактики, скопления
+        // и квазары (> 5 млн св. лет от камеры, вроде M74) не подписываются — остаются соседи по Местной группе
+        if (dGC > 6e4 && dGC < 5e6 && dO > 5e6 && (o.vis === 'galaxy' || o.vis === 'galcluster' || o.vis === 'quasar') && o !== (this.selected && this.selected.obj)) continue;
         // лёгкие объекты каталогов — только видимые с текущей точки
         if (o.lite && r.dsoVisible && !r.dsoVisible(o, dO)) continue;
         // NGC/IC подписываются, только если яркие или камера рядом; Мессье — всегда
@@ -987,7 +1002,6 @@
         label(o.name, o.pos, { nebula: '#ff9ab0', snr: '#ffb27a', planetary: '#7af0d0', globular: '#ffe4a8', cluster: '#a8c8ff', galaxy: '#d8c8ff', pulsar: '#8fd4ff', quasar: '#9fc0ff', galcluster: '#ffd9a0', xray: '#b6c8ff' }[o.vis] || '#ddd', { size: 11, bold: landmark, alpha: gf, obj: o });
       }
       label('Стрелец A*', sc.bh.pos, '#ffb060', { bold: v3.dist(cam.pos, sc.bh.pos) < 2000 });
-      if (sunD > 6000) for (const a of MW.galaxy.armLabels()) label(a.name, a.pos, 'rgba(170,200,255,0.8)', { size: 12, center: true });
     }
   }
 

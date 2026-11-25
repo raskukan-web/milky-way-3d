@@ -37,6 +37,8 @@ uniform vec4 u_fl[3];              // вспышки молний: положе�
 uniform float u_glow;              // тепловое свечение глубин (горячий юпитер) / магмы
 uniform int u_steps, u_lightN;
 uniform float u_pixAng;
+uniform float u_wisp;              // потоки конденсата (пряди по ветру у высоты камеры): 0 — нет
+uniform vec4 u_probe;              // w > 0.5: «проба» — один луч строго на звезду (видимость звезды для бликов объектива)
 layout(location=0) out vec4 oIn;
 layout(location=1) out vec4 oT;
 vec3 PC;
@@ -53,7 +55,10 @@ float cloudD(vec3 p, bool fine, out float hn){
   float uL = smoothstep(u_deck.x, u_deck.x + 0.15, hn) * smoothstep(u_deck.y + 0.1 * big, u_deck.y - 0.2, hn);
   d = uL * clamp(u_deck.z + 0.55 * big, 0.0, 1.0);
   if (u_deck2.y > u_deck2.x){
-    float lL = smoothstep(u_deck2.x, u_deck2.x + 0.15, hn) * smoothstep(u_deck2.y + 0.15 * big, u_deck2.y - 0.2, hn);
+    // нижний ярус — сплошной облачный «океан» с волнистой поверхностью (крупные валы + мелкая зыбь по ветру)
+    float wave = 0.3 * big + 0.08 * snoise(vec3(q * vec2(1.1, 1.6), 11.0));
+    // кромка «океана» мягкая (0,4 H): тонкую кромку шаги трассировки резали на «годичные кольца»
+    float lL = smoothstep(u_deck2.x, u_deck2.x + 0.15, hn) * smoothstep(u_deck2.y + wave + 0.1, u_deck2.y + wave - 0.3, hn);
     d = max(d, lL * clamp(0.8 + 0.4 * big, 0.0, 1.0));
   }
   // конвективные башни из глубины: стены «облачного каньона»
@@ -69,6 +74,17 @@ float cloudD(vec3 p, bool fine, out float hn){
   vec3 r = vec3(q * vec2(5.0, 5.0 * (1.0 + u_deck2.w)), hn * 4.5 / u_deck.w * (1.0 + 0.5 * u_deck2.w) + u_t * 0.004);
   float e = fine ? fbm(r, 3) : snoise(r);
   return clamp((d - 0.35 - 0.45 * e) * 2.2, 0.0, 1.0);
+}
+// потоки конденсата: тонкие пряди, вытянутые и несущиеся по ветру втрое быстрее облаков, в слое у высоты камеры
+float wispD(vec3 p, float hn){
+  if (u_wisp <= 0.0) return 0.0;
+  // слой тоньше 0,1 H под камерой, пряди — не ближе 0,3 H (вблизи их растянула бы перспектива в «лучи»)
+  float dz = hn - u_alt / u_H + 0.15;
+  float band = exp(-dz * dz * 300.0) * smoothstep(0.3 * u_H, 1.5 * u_H, length(p.xy));
+  if (band < 0.05) return 0.0;
+  vec2 q = (p.xy + u_wind * 3.0) / u_H;
+  float s = snoise(vec3(q.x * 1.2, q.y * 12.0, hn * 6.0 + u_t * 0.02));
+  return smoothstep(0.72, 0.95, s) * band * u_wisp;
 }
 // небо над облаками (и отражение в океане)
 vec3 skyCol(vec3 rd, float h0, out vec3 Tsp){
@@ -98,11 +114,13 @@ float waveH(vec2 w, float foot, out vec2 grad){
   return h;
 }
 void main(){
-  vec3 rd = normalize(u_w2l * rayDir());
+  vec3 rd = u_probe.w > 0.5 ? u_probe.xyz : normalize(u_w2l * rayDir());
   PC = vec3(0.0, 0.0, -(u_R + u_alt));
   float H = u_H;
-  // белый шум сдвига шагов (регулярный дизеринг на пониженном разрешении давал муар на облаках)
-  float ign = hash12(gl_FragCoord.xy * 1.37 + 17.0);
+  // сдвиг начала шагов — Interleaved Gradient Noise (Хименес, 2014): равномерно распределённый по экрану шум без
+  // «комков» белого шума; небольшая (30 %) случайная примесь ломает его регулярность — иначе на тонкой кромке
+  // облачного «океана» оставался муар («вельвет»). После размытия 3×3 в композите — гладко, без зерна
+  float ign = u_probe.w > 0.5 ? 0.5 : fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + 0.3 * hash12(gl_FragCoord.xy * 1.37 + 17.0));
   bool liquid = u_style >= 3;
   // ---- куда упирается луч: поверхность (жидкие миры) или «бездна» под облаками ----
   vec2 hs = raySphere(vec3(0.0), rd, PC, u_R);
@@ -132,6 +150,7 @@ void main(){
       vec3 p = rd * t;
       float hn;
       float d = cloudD(p, t < 25.0 * H, hn);
+      d = max(d, wispD(p, hn));
       // дымка между облаками: экспоненциальная по высоте
       float hz = u_hazeK / H * exp(-hn * 0.9);
       if (d > 0.0 || hz * ds > 1e-4){
@@ -157,7 +176,9 @@ void main(){
         // тепловое свечение раскалённых глубин (горячий юпитер)
         if (u_glow > 0.0) em += vec3(1.0, 0.32, 0.08) * u_glow * smoothstep(0.3, -1.5, hn);
         float sc = d * 22.0 / H;                      // коэффициент рассеяния облака, 1/км
-        vec3 S = (Ls * phC * (1.0 + 2.0 * exp(-od * 3.0) * (1.0 - exp(-d * 4.0))) + skyAmb * (0.25 + 0.75 * hk) + em) * alb * sc
+        // «серебряная кайма»: тонкие края облаков против звезды просвечивают золотом (рассеяние вперёд)
+        vec3 silver = Ls * vec3(1.0, 0.8, 0.5) * pow(max(msun, 0.0), 6.0) * exp(-od * 1.5) * d * (1.0 - d) * 10.0;
+        vec3 S = (Ls * phC * (1.0 + 2.0 * exp(-od * 3.0) * (1.0 - exp(-d * 4.0))) + silver + skyAmb * (0.25 + 0.75 * hk) + em) * alb * sc
                + (Ls * phH + skyAmb * 0.5 + em * 0.3) * u_haze * hz;
         vec3 ext = vec3(sc) + hz * u_ext;
         vec3 tr = exp(-ext * ds);
@@ -270,17 +291,19 @@ out vec4 o;
 void main(){
   vec3 s = texture(u_src, v_uv).rgb;
   vec3 T = vec3(0.0), In = vec3(0.0);
-  // облака мягкие: лёгкое гауссово размытие карт снимает зерно случайного сдвига шагов трассировки
+  // Сдвиг шагов трассировки — Interleaved Gradient Noise: в любом окне 3×3 соседних текселей его значения
+  // распределены почти равномерно, поэтому равномерное среднее 3×3 (шаг ровно 1 тексель) гасит и зерно, и муар
   vec2 px = u_blur / vec2(textureSize(u_skyIn, 0));
   float ws = 0.0;
   for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++){
-    float w = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
+    float w = 1.0;
     vec2 uv = v_uv + vec2(float(x), float(y)) * px;
     In += texture(u_skyIn, uv).rgb * w; T += texture(u_skyT, uv).rgb * w; ws += w;
   }
   In /= ws; T /= ws;
   float l = dot(s, vec3(0.2126, 0.7152, 0.0722));
-  float veil = mix(u_veil, 1.0, smoothstep(1.5, 12.0, l));
+  // дневная вуаль гасит тусклые звёзды, но не освещённые серпы соседних планет системы и яркие светила
+  float veil = mix(u_veil, 1.0, smoothstep(0.3, 2.5, l));
   o = vec4(mix(s, s * T * veil + In, u_mixK), 1.0);
 }`;
 })();

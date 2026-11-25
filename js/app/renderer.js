@@ -255,7 +255,8 @@
         if (k < 0.01) continue;
         this.drawParticles(s.buf, o.pos, null, 0.5 * k, 3.0, false, false);
       }
-      const kb = out * (1 - U.smoothstep(2e9, 6e9, sunD));
+      // межсверхскопленческие мосты — тоже только вне Местной группы
+      const kb = dGC < 5e6 ? 0 : out * (1 - U.smoothstep(2e9, 6e9, sunD));
       if (kb > 0.01) this.drawParticles(this.superBridges, [0, 0, 0], null, 0.45 * kb, 3.0, false, false);
     }
 
@@ -445,17 +446,39 @@
     }
 
     buildLines() {
-      const cam = this.cam.pos, out = [];
-      const seg = (a, b, c) => out.push(a[0] - cam[0], a[1] - cam[1], a[2] - cam[2], c[0], c[1], c[2], c[3], b[0] - cam[0], b[1] - cam[1], b[2] - cam[2], c[0], c[1], c[2], c[3]);
+      const cam = this.cam.pos, out = [], fwd = this.cam.forward;
+      // Отрезки — относительно камеры в Float64. Строгое отсечение по ближней плоскости (как в GL, но на CPU):
+      // концы позади камеры переносятся на плоскость z = NEAR, полностью невидимые отрезки отбрасываются — ни один
+      // отрезок с w ≤ 0 не растягивается через экран. Отрезок, проходящий у самого глаза (созвездие, орбита,
+      // поток Ланиакеи при пролёте), виден под углом ~180° и выглядел бы «диагональной полосой» через всё небо —
+      // такие гаснут по угловому размеру (60° → 110°).
+      const NEAR = 1e-9;
+      const seg = (a, b, c) => {
+        let A = [a[0] - cam[0], a[1] - cam[1], a[2] - cam[2]], B = [b[0] - cam[0], b[1] - cam[1], b[2] - cam[2]];
+        const dA = v3.dot(A, fwd), dB = v3.dot(B, fwd);
+        if (dA < NEAR && dB < NEAR) return;
+        if (dA < NEAR) A = v3.lerp(A, B, (NEAR - dA) / (dB - dA));
+        else if (dB < NEAR) B = v3.lerp(B, A, (NEAR - dB) / (dA - dB));
+        const la = v3.len(A), lb = v3.len(B);
+        if (!(la > 0) || !(lb > 0)) return;
+        const ang = Math.acos(MW.util.clamp(v3.dot(A, B) / (la * lb), -1, 1));
+        const al = c[3] * (1 - MW.util.smoothstep(60 * MW.C.DEG, 110 * MW.C.DEG, ang));
+        if (al < 0.003) return;
+        out.push(A[0], A[1], A[2], c[0], c[1], c[2], al, B[0], B[1], B[2], c[0], c[1], c[2], al);
+      };
       const sunD = v3.len(cam);
-      if (this.s.constellations) {
+      const dGC = v3.dist(cam, MW.C.GC_POS);
+      // линии созвездий — земной рисунок неба: на поверхности/в атмосфере чужих миров они не рисуются
+      const sfA = this.surface && this.surface.active ? this.surface : null;
+      if (this.s.constellations && !(sfA && sfA.body && !sfA.body.system.isSolar)) {
         const a = 0.42 * (1 - MW.util.smoothstep(600, 5000, sunD));
         if (a > 0.005) for (const c of MW.catalog.constellations) {
           const col = c.asterism ? [0.9, 0.75, 0.35, a * 0.7] : [0.35, 0.6, 1.0, a];
           for (const [s1, s2] of c.segs) seg(s1.pos, s2.pos, col);
         }
       }
-      if (this.s.orbits) {
+      // на поверхности и в атмосфере орбиты не рисуются: изнутри системы они ложатся через всё небо дугами и полосами
+      if (this.s.orbits && !(this.surface && this.surface.active)) {
         // рядом с крупным телом прочие орбиты приглушаются
         const anc = this.cam.anchor;
         const near = anc ? 1 - 0.75 * MW.util.smoothstep(40, 200, this.pxRadius(anc.radius, v3.dist(cam, anc.pos))) : 1;
@@ -491,7 +514,8 @@
           for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i], col);
         }
       }
-      if (this.s.flows && this.laniFlows) {
+      // потоки Ланиакеи — только вне Местной группы (дальше 5 млн св. лет от центра Галактики)
+      if (this.s.flows && this.laniFlows && dGC >= 5e6) {
         const a = 0.42 * MW.util.smoothstep(4e7, 2.5e8, sunD) * (1 - MW.util.smoothstep(4e9, 1.2e10, sunD));
         if (a > 0.005) for (const pts of this.laniFlows) {
           const n = pts.length;
@@ -895,7 +919,9 @@
       const art = this.s.artistic;
       // объёмный газ: в художественном режиме — полноценная светящаяся подложка рукавов
       this.drawParticles(this.mwGas, MW.C.GC_POS, null, 0.065 * gb * (art ? 0.4 : 0.2), 5.0, false, true);
-      this.drawParticles(this.mwLum, MW.C.GC_POS, null, 0.065 * gb, 8.0, false);
+      // изнутри диска при видимой фотопанораме звёзды 3D-диска видны строго с ребра и складываются в тонкую
+      // фиолетовую черту по галактическому экватору поверх настоящего Млечного Пути — там слой почти гасится
+      this.drawParticles(this.mwLum, MW.C.GC_POS, null, 0.065 * gb * (1 - 0.97 * inside * panoK), 8.0, false);
       // гало и шаровые скопления заметны, когда Галактика видна снаружи (вблизи Солнца они не засоряют небо)
       const outside = MW.util.smoothstep(12000, 45000, Math.hypot(zr * 2.2, Math.max(0, Rr - 30000)));
       if (outside > 0.01) this.drawParticles(this.mwHalo, MW.C.GC_POS, null, 0.065 * this.s.galaxyBright * outside, 6.0, false);
@@ -1080,13 +1106,14 @@
           const st = sf.body.system.star;
           // звезда системы: пропускание атмосферы; за горами (профиль рельефа к звезде) — лучей нет
           tK = pos === st.pos ? (sf.sunElev() < (sf.horizonSun ?? -90) ? 0 : 0.2126 * sf.sunT[0] + 0.7152 * sf.sunT[1] + 0.0722 * sf.sunT[2]) : sf.veil;
-          // в атмосфере гиганта звезду часто заслоняют облачные башни — блики линзы скромнее
-          if (sf.mode === 'aero' && pos === st.pos) tK *= 0.15;
+          // в атмосфере гиганта: видимость звезды сквозь облака — по лучу-пробе шейдера атмосферы (sf.sunVis);
+          // за облачным валом лучей и бликов нет, у кромки облака они плавно возвращаются
+          if (sf.mode === 'aero' && pos === st.pos) tK *= 0.5 * MW.util.smoothstep(0.04, 0.5, sf.sunVis ?? 1);
         }
         if (tK < 0.02) return;
         Iraw *= tK;
         const c = color || [1, 1, 1], mx = Math.max(c[0], c[1], c[2], 1e-3);
-        out.push({ x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I: I * tK * diskFadeNear, len: len * Math.sqrt(tK) * (0.4 + 0.6 * diskFadeNear), mag: x, Iraw, sys: !!sys, col: c.map((v) => 0.5 * v / mx + 0.5) });
+        out.push({ tK, x: pp.x * k, y: (cv.clientHeight - pp.y) * k, I: I * tK * diskFadeNear, len: len * Math.sqrt(tK) * (0.4 + 0.6 * diskFadeNear), mag: x, Iraw, sys: !!sys, col: c.map((v) => 0.5 * v / mx + 0.5) });
       };
       const RS = MW.C.RSUN_LY;
       for (const sys of this.scene.systems) add(sys.star.pos, sys.star.color, sys.star.absMag, sys.star.radius || (sys.star.radiusSun || 1) * RS, true);
@@ -1113,7 +1140,8 @@
       p.set('u_src', a); p.set('u_scol', c);
       // блики объектива и анаморфная полоса — только от действительно ярких источников (Солнце, звезда рядом)
       // блики объектива — только от очень яркого источника (Солнце не дальше ~орбиты Сатурна)
-      const gT = src[0].sys ? MW.util.clamp((src[0].mag - 20) / 6, 0, 1) * 0.25 * (this.surface && this.surface.active && this.surface.prof.atm ? 0.12 : 1) : 0;
+      // (круглые блики гаснут вместе с пропусканием к звезде: за облаками, горами, в дымке)
+      const gT = src[0].sys ? MW.util.clamp((src[0].mag - 20) / 6, 0, 1) * 0.25 * (src[0].tK ?? 1) * (this.surface && this.surface.active && this.surface.prof.atm ? 0.12 : 1) : 0;
       const now = performance.now(), gdt = Math.min(0.25, ((now - (this._gT || now)) / 1000) || 0.016);
       this._gT = now;
       this._ghost = (this._ghost || 0) + (gT - (this._ghost || 0)) * (1 - Math.exp(-gdt / 0.3));
@@ -1189,6 +1217,7 @@
       const galScale = MW.util.smoothstep(4000, 40000, sd) * (1 - MW.util.smoothstep(3e7, 2e8, sd));
       c.set('u_bloomStr', doBloom ? this.s.bloom * (1 - 0.6 * galScale) : 0); c.set('u_exposure', this.s.exposure * (this.autoExp || 1) * (this.surface && this.surface.active && this.surface.glReady() ? 2.2 : 1));   // на поверхности — «дневная» экспозиция
       c.set('u_time', this.scene.realTime); c.set('u_vignette', 0.35); c.set('u_art', this.s.artistic ? 1 : 0);
+      c.set('u_fxaa', this.s.fxaa === false ? 0 : 1);   // FXAA после тонирования: «лесенки» горизонта и колец
       this.glc.fullscreen();
     }
   }
