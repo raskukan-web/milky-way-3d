@@ -238,7 +238,7 @@
       if (!this.superList || !this.superList.length) return;
       const U = MW.util;
       // синтетические рои показываются, когда камера ушла из Местной группы (вблизи Солнца — реальные галактики)
-      const out = U.smoothstep(6e6, 4e7, sunD);
+      const out = U.smoothstep(6e6, 4e7, sunD) * (1 - 0.85 * this.galaxyFill(cam));
       if (out < 0.01) return;
       for (const s of this.superList) {
         const o = s.obj, D = v3.dist(cam.pos, o.pos);
@@ -277,15 +277,19 @@
       const out = [];
       this.dsoList = [];
       const BOOST = new Set(['m31', 'm33', 'm81', 'm82', 'ngc0253', 'ngc5128', 'm101', 'm51', 'm104']);
+      // галактики из частиц (M31, M33, M81, M51, M104… — всё OpenNGC с детальной моделью) получают объёмного
+      // «двойника» в общем буфере: диск с рукавами, балдж и пыль по морфологическому типу; частицы поверх него —
+      // лишь разрешённые звёзды. Магеллановы Облака и карлики Местной группы остаются только частицами.
+      const twinOk = (o) => o.vis === 'galaxy' && o.gal !== 'dsph' && !['lmc', 'smc', 'sgrdsph'].includes(o.id) && (o.ext || o.radius >= 12000);
+      for (const g of this.extGal) g.twin = twinOk(g.obj);
       for (const o of cat.dsos) {
-        // ключевые галактики, нарисованные частицами (M31, M33, M81, M82, M51…), издали подхватывает дубль
-        // в общем буфере с объёмным балджем и гало (иначе они сжимаются в тусклую точку)
-        const farOnly = BOOST.has(o.id) && dedicated.has(o);
+        const farOnly = dedicated.has(o) && o.vis === 'galaxy' && twinOk(o);
         if (!farOnly && (!o.ext || dedicated.has(o))) continue;
         const cls = clsOf(o);
         if (cls < 0) continue;
         const h = MW.rng.mulberry32(MW.rng.hashStr(o.id));
-        const nrm = o.normal || v3.norm([h.gauss(), h.gauss(), h.gauss()]);
+        let nrm = o.normal || v3.norm([h.gauss(), h.gauss(), h.gauss()]);
+        if (cls <= 2) nrm = this.galMorph(o, nrm);
         const absM = o.mag !== null && o.mag !== undefined && o.dist ? o.mag - 5 * Math.log10(o.dist / 32.6156) : ABS[cls];
         o.dsoCls = cls; o.dsoAbs = absM;
         let col = COL[cls] || [1, 1, 1];
@@ -300,9 +304,43 @@
       }
       this.dsoBuf = this.glc.instanced(f32(out), [[1, 3], [2, 3], [3, 3], [4, 3], [5, 4]]);
     }
+    /* Морфология галактики по типу Хаббла из OpenNGC → код в длине нормали (см. deepsky.js):
+       |n| = 1 + стадия + 8·бар + 24·особая модель + 0,98·q. Эллиптическим нормаль ставится поперёк луча зрения
+       с Земли: тогда видимое сжатие равно каталожному b/a. */
+    galMorph(o, nrm) {
+      const SPEC = { m104: 1, ngc4594: 1, ngc5128: 2, m82: 3, ngc3034: 3 };
+      const HUB = { m31: 'SAb', m33: 'SAc', m82: 'I0', ngc5128: 'E', m104: 'Sa', m101: 'SABc', m51: 'SABbc' };
+      const h = (HUB[o.id] || o.hubble || (o.gal === 'spiral' ? 'Sb' : o.gal === 'irr' ? 'I' : 'E')).replace(/\(.*?\)/g, '').replace(/[?:]/g, '');
+      const spc = SPEC[o.id] || 0;
+      let st, bar = 0;
+      if (/^S0/.test(h) || /^E-S0/.test(h)) st = 1;
+      else if (/^E|^cD/.test(h)) st = 0;
+      else if (/^I/.test(h)) st = 6;
+      else {
+        bar = /^SB/.test(h) ? 2 : /^SAB/.test(h) ? 1 : 0;
+        const s = h.replace(/^S(AB|A|B)?/, '');
+        st = /^(a|ab)/.test(s) ? 2 : /^(b|bc)/.test(s) ? 3 : /^(c|cd)/.test(s) ? 4 : /^(d|m)/.test(s) ? 5 : o.gal === 'irr' ? 6 : 3;
+      }
+      if (/^I/.test(h)) bar = /^IB/.test(h) ? 2 : 0;
+      if (spc === 3) st = 6;
+      let q = 0, n = nrm;
+      const toSun = v3.norm(o.pos);
+      if (st === 0 && spc !== 2) {
+        const en = /^E(\d)/.exec(h);
+        q = MW.util.clamp(o.ba ?? (en ? 1 - +en[1] / 10 : 0.8), 0.3, 1);
+        const mj = o.major || v3.perp(toSun);
+        n = v3.norm(v3.cross(mj, toSun));
+      } else if (spc) {
+        // почти с ребра: Сомбреро (i ≈ 84°), пылевая полоса Центавра A, диск M82 (i ≈ 80°)
+        const mj = o.major || v3.perp(toSun), k = v3.norm(v3.cross(mj, toSun)), cI = spc === 1 ? 0.1 : spc === 2 ? 0.2 : 0.18;
+        n = v3.norm(v3.add(v3.scale(toSun, cI), v3.scale(k, Math.sqrt(1 - cI * cI))));
+      }
+      const code = st + 8 * bar + 24 * spc;
+      return v3.scale(v3.norm(n), 1 + code + 0.98 * q);
+    }
     // виден ли лёгкий объект каталога с текущей точки (для выбора кликом и подписей)
     dsoVisible(o, d) {
-      if (o.est && v3.len(this.cam.pos) > o.dist * 0.3) return false;   // положение условно — издали не показываем
+      if (o.est && v3.len(this.cam.pos) > o.dist * 0.3 && d > o.radius * 40) return false;   // положение условно — издали не показываем
       if (o.dsoAbs === undefined) return true;
       if (this.pxRadius(o.radius, d) > 4) return true;
       return o.dsoAbs + 5 * Math.log10(Math.max(d, 1e-12) / 32.6156) < this.dsoMagLim - 1.5;
@@ -736,8 +774,17 @@
       p.set('u_scale', MW.dpr() * this.s.renderScale); p.set('u_bright', 1.0);
       p.set('u_bgShrink', this.focusK || 0);
       p.set('u_marchK', MW.Q.march);
+      p.set('u_pano', panoK);
       this.glc.blendAdd();
       this.drawInst(this.dsoBuf);
+    }
+    // насколько крупная галактика заполняет кадр (0..1): рядом с ней космическая паутина отступает в фон
+    galaxyFill(cam) {
+      let px = 0;
+      const anc = cam.anchor;
+      if (anc && anc.vis === 'galaxy') px = this.pxRadius(anc.radius, Math.max(v3.dist(cam.pos, anc.pos), 1));
+      for (const g of this.extGal) if (g.twin) px = Math.max(px, this.pxRadius(g.obj.radius, Math.max(v3.dist(cam.pos, g.obj.pos), 1)));
+      return MW.util.smoothstep(40, 300, px);
     }
     drawCosmos(cam, sunD, panoK) {
       const U = MW.util;
@@ -749,7 +796,7 @@
       const webK = Math.sqrt(U.smoothstep(0, 1, Math.log(Math.max(sunD, 1) / 5e5) / Math.log(2e7 / 5e5)));
       if (webK > 0.01) {
         // яркость растёт с расстоянием: издали видна вся сеть, а не отдельные точки
-        const gain = webK * (0.22 + 0.43 * U.smoothstep(1.5e9, 4e9, sunD) + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
+        const gain = webK * (1 - 0.8 * this.galaxyFill(cam)) * (0.22 +0.43 * U.smoothstep(1.5e9, 4e9, sunD) + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
         const fog = [1.8e10, 8e10];
         this.drawParticles(this.webBuf, [0, 0, 0], null, 0.9 * gain, 2.0, false, false, fog);
         this.drawParticles(this.qsoBuf, [0, 0, 0], null, 1.6 * gain, 2.0, false, false, fog);
@@ -850,7 +897,9 @@
         const Dg = Math.max(v3.dist(cp, g.obj.pos), 1);
         const prG = Math.max(this.pxRadius(g.obj.radius * 1.1, Dg), 1);
         const kDens = MW.util.clamp(4 / (g.lum.count / (Math.PI * prG * prG)), 0.035, 1);
-        this.drawParticles(g.lum, g.obj.pos, g.model, 0.05 * this.s.galaxyBright * g.bright * kDens * (1 - 0.9 * panoK), 6.0, false);
+        // у галактик с объёмной моделью частицы — только разрешённые звёзды поверх неё (заметны вблизи)
+        const kTw = g.twin ? (g.obj.id === 'm31' ? 0.6 : 0.4) * MW.util.smoothstep(40, 400, prG) : 1;
+        if (kTw > 0.005) this.drawParticles(g.lum, g.obj.pos, g.model, 0.05 * this.s.galaxyBright * g.bright * kDens * kTw * (1 - 0.9 * panoK), 6.0, false);
       }
       for (const c of this.clusters) if (c.glow) this.drawParticles(c.glow, c.obj.pos, null, 0.08 * this.s.galaxyBright, 3.0, false);
       // снаружи (вид на диск) пылевые прожилки контрастнее: они «прорезают» звёздные поля, как на снимках «Хаббла»
@@ -858,7 +907,7 @@
       // пятно в центре Галактики поверх светлой панорамы)
       const w3 = 1 - 0.9 * panoK;
       this.drawParticles(this.mwDust, MW.C.GC_POS, null, 0.4 * (1 - 0.45 * inside) * (1 + 0.6 * outside) * (art ? 1.9 : 1.0) * w3 * w3, 7.0, true);
-      for (const g of this.extGal) if (g.dust) this.drawParticles(g.dust, g.obj.pos, g.model, 0.5, 6.0, true);
+      for (const g of this.extGal) if (g.dust) this.drawParticles(g.dust, g.obj.pos, g.model, g.twin ? 0.2 : 0.5, 6.0, true);
 
       // «фокус» на близком теле (планета, спутник, аппарат крупно в кадре): протяжённый фон уменьшается
       const anc = cam.anchor;
@@ -946,7 +995,7 @@
         const R = st.radius;
         if (this.pxRadius(R * 4.2, D) > 1.5 && this.inView(rel, D, R * 4.2)) draw.push({ D, f: () => this.drawStarBody(st, D, rel) });
         for (const b of sys.bodies) {
-          if (surf && b === surf.body) continue;      // тело под ногами рисует ландшафт
+          if (surf && b === surf.body && surf.hidesBody()) continue;      // тело под ногами рисует ландшафт / атмосфера
           const relb = v3.sub(b.pos, cam.pos), Db = v3.len(relb);
           const Rb = b.radius * Math.max(b.ring ? b.ring[1] : 1.1, b.exo && b.exo[2] ? b.exo[2] * 3 + 2 : 0);
           if (this.pxRadius(b.radius, Db) > 0.6 && this.inView(relb, Db, Rb)) draw.push({ D: Db, f: () => this.drawPlanet(b, Db, relb) });
@@ -1021,6 +1070,8 @@
           const st = sf.body.system.star;
           // звезда системы: пропускание атмосферы; за горами (профиль рельефа к звезде) — лучей нет
           tK = pos === st.pos ? (sf.sunElev() < (sf.horizonSun ?? -90) ? 0 : 0.2126 * sf.sunT[0] + 0.7152 * sf.sunT[1] + 0.0722 * sf.sunT[2]) : sf.veil;
+          // в атмосфере гиганта звезду часто заслоняют облачные башни — блики линзы скромнее
+          if (sf.mode === 'aero' && pos === st.pos) tK *= 0.15;
         }
         if (tK < 0.02) return;
         Iraw *= tK;

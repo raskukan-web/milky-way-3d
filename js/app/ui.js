@@ -243,7 +243,19 @@
         if (sf.active && sf.body === o) sf.takeoff(); else sf.land(o);
         this.updateLandBtn(o);
       };
+      $('#cardDive').onclick = () => {
+        const o = this.selected && this.selected.obj, sf = this.app.surface;
+        if (!o) return;
+        sf.dive(o);
+        this.updateLandBtn(o);
+      };
       $('#surfUp').onclick = () => this.app.surface.takeoff();
+      // ▲▼ — набор/сброс высоты, пока кнопка нажата (мышь и палец)
+      const hold = (el, v) => {
+        const on = (e) => { e.preventDefault(); this.app.surface.altCmd = v; }, off = () => { this.app.surface.altCmd = 0; };
+        el.addEventListener('pointerdown', on); ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => el.addEventListener(ev, off));
+      };
+      hold($('#surfAltUp'), 1); hold($('#surfAltDn'), -1);
       $('#tPause').onclick = () => this.togglePause();
       $('#tSlow').onclick = () => this.timeStep(-1);
       $('#tFast').onclick = () => this.timeStep(1);
@@ -304,16 +316,23 @@
       this.updateLandBtn(o);
     }
     // кнопка «Приземлиться» — у твёрдых планет и спутников; на поверхности этого тела — «Взлететь на орбиту»
+    // «Погрузиться в атмосферу» — у гигантов, мини-нептунов, Венеры, океанов магмы и воды
     updateLandBtn(o) {
-      const btn = $('#cardLand'), sf = this.app.surface;
+      const btn = $('#cardLand'), dv = $('#cardDive'), sf = this.app.surface;
       if (!btn) return;
-      const ok = sf && o && sf.isLandable(o);
-      btn.classList.toggle('hidden', !ok);
-      if (ok) btn.textContent = sf.active && sf.body === o ? '🚀 Взлететь на орбиту' : '🛬 Приземлиться';
-      if (ok) sf.initGL(this.r);      // шейдеры ландшафта компилируются заранее, в фоне, пока читают карточку
+      const here = sf && o && sf.active && sf.body === o;
+      const land = sf && o && sf.isLandable(o) && o.type !== 1, dive = sf && o && sf.isDivable(o);
+      btn.classList.toggle('hidden', !(land || here));
+      dv.classList.toggle('hidden', !dive || !!here);
+      if (land || here) btn.textContent = here ? '🚀 Взлететь на орбиту' : '🛬 Приземлиться';
+      if (land || dive) sf.initGL(this.r);      // шейдеры компилируются заранее, в фоне, пока читают карточку
     }
     onSurface(on) {
       $('#surfHud').classList.toggle('hidden', !on);
+      const aero = on && this.app.surface.mode === 'aero';
+      $('#surfAlt').classList.toggle('hidden', !aero);
+      $('#surfHint').textContent = aero ? 'WASD — лететь · R/F или ▲▼ — выше/ниже · мышь / палец — осмотр · Shift — быстрее'
+        : 'WASD / стрелки — идти · мышь / палец — осмотр · R/F — выше/ниже · Shift — быстрее';
       document.body.classList.toggle('on-surface', on);
       if (this.selected) this.updateLandBtn(this.selected.obj);
     }
@@ -797,7 +816,15 @@
       else if (gcD > 70000 || Math.abs(cam.pos[2] - MW.C.GC_POS[2]) > 15000) where = gcD > 400000 ? 'Межгалактическое пространство' : 'Над диском Галактики';
       if (cam.auto) where = '⟫ Автопилот → ' + cam.auto.target.name;
       const sf = this.app.surface;
-      if (sf && sf.active) {
+      if (sf && sf.active && sf.mode === 'aero') {
+        const A = sf.aero, a = sf.alt || 0, el = sf.sunElev();
+        where = '🪂 В атмосфере: ' + sf.body.name;
+        const st = sf.body.system.star;
+        const km = (x) => (Math.abs(x) < 1000 ? Math.round(x) + ' м' : (x / 1000).toFixed(Math.abs(x) < 1e4 ? 1 : 0) + ' км');
+        const hTxt = A.style >= 3 ? 'высота ' + km(a) + ' над ' + A.title
+          : (a >= 0 ? '+' : '−') + km(Math.abs(a)) + ' от уровня 1 бар · ' + ((pb) => (pb < 0.001 ? '< 0,001' : '≈ ' + pb.toPrecision(2).replace('.', ','))) (Math.exp(-a / (A.H * 1000))) + ' бар';
+        $('#surfInfo').textContent = sf.body.name + ' · ' + hTxt + ' · ' + (st.isSun ? 'Солнце' : st.name) + ' ' + (el >= 0 ? '+' : '−') + Math.abs(el).toFixed(0) + '°' + (sf.descent ? ' · спуск…' : '');
+      } else if (sf && sf.active) {
         where = '⛰ На поверхности: ' + sf.body.name;
         const a = sf.alt || 0, el = sf.sunElev();
         const st = sf.body.system.star;
@@ -828,6 +855,8 @@
       this._labelHits = [];
       const sfl = this.app.surface;
       this._surfUp = sfl && sfl.active ? v3.norm(v3.sub(cam.pos, sfl.body.pos)) : null;
+      // днём на поверхности / в атмосфере звёзды и далёкие объекты не видны — подписываем только тела своей системы
+      this._surfDay = !!(sfl && sfl.active && sfl.veil < 0.4);
       const occ = [];
       const free = (x, y, wd) => { for (const o of occ) if (Math.abs(o[0] - x) < (o[2] + wd) / 2 + 4 && Math.abs(o[1] - y) < 13) return false; occ.push([x, y, wd]); return true; };
       const selName = this.selected ? this.selected.obj.name : null;
@@ -854,6 +883,7 @@
         if (occl.length && hidden(pos)) return null;
         // на поверхности: объекты под местным горизонтом не подписываем
         if (this._surfUp && v3.dot(v3.sub(pos, cam.pos), this._surfUp) < -0.01 * v3.dist(pos, cam.pos)) return null;
+        if (this._surfDay && !opts.force && v3.dist(pos, cam.pos) > 0.01) return null;
         ctx.font = (opts.bold ? '600 ' : '') + (opts.size || 12) + 'px "Segoe UI", system-ui, sans-serif';
         const tw = ctx.measureText(text).width;
         const ox = opts.center ? -tw / 2 : 8, oy = opts.center ? 4 : -6;

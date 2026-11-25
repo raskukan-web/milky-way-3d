@@ -166,6 +166,11 @@ body.mobile button, body.mobile .chip { min-height: 32px; }
 /* ---------- режим «На поверхности» ---------- */
 #cardLand { width: 100%; margin-top: 6px; }
 #cardLand.hidden { display: none; }
+#cardDive { width: 100%; margin-top: 6px; }
+#cardDive.hidden { display: none; }
+#surfAlt { display: flex; gap: 6px; justify-content: center; margin: 6px 0; }
+#surfAlt.hidden { display: none; }
+#surfAlt button { min-width: 84px; touch-action: none; }
 #surfHud { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 5; padding: 8px 14px; text-align: center; max-width: calc(100vw - 32px); }
 #surfHud.hidden { display: none; }
 #surfInfo { font-size: 13px; font-weight: 600; }

@@ -19,7 +19,10 @@
   const PM = 65536;
   const EYE = 2.0;
   const DEG = Math.PI / 180;
-  const LANDABLE = new Set([0, 2, 3, 8, 9, 10, 11, 12, 13, 15, 16]);
+  const LANDABLE = new Set([0, 1, 2, 3, 8, 9, 10, 11, 12, 13, 15, 16]);
+  // «Погрузиться в атмосферу»: гиганты и мини-нептуны (полёт у облачной палубы), океаны магмы и воды (зависание),
+  // Венера (спуск сквозь облака на раскалённую равнину — режим посадки со своей атмосферой)
+  const DIVE = new Set([1, 4, 5, 6, 7, 14, 17, 15, 12]);
   const EARTH_R = [5.8e-6, 13.5e-6, 33.1e-6];
   const EARTH_O3 = [0.65e-6, 1.88e-6, 0.085e-6];
   const sc3 = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
@@ -82,6 +85,17 @@
     } else if (id === 'triton') {
       Object.assign(P, { style: 9, relief: 800, hill: 80, terr: [0.1, 0, 0.3, 0.4], terr2: [0, 0, 0.6, 0], frost: 1 });
       P.vents = { n: 4, h: 8000, w: 500, col: [0.12, 0.11, 0.1], dark: true };
+    } else if (id === 'venus' || t === 1) {
+      // CO₂ 92 бар и сплошные облака серной кислоты на 48–70 км: свет рассеян много раз, диска Солнца не видно;
+      // синий поглощён (сернистые соединения) — у поверхности густой оранжево-жёлтый полумрак, +465 °C
+      Object.assign(P, { style: 7, relief: 1600, hill: 90, terr: [0, 0, 0.5, 0.5], wind: 1, shimmer: 0.9, heat: 0 });
+      const Hc = 22000;
+      P.atm = { bR: sc3(EARTH_R, 9), bMs: [5.6 / Hc * 0.97, 5.0 / Hc * 0.9, 4.6 / Hc * 0.6], bMa: [5.6 / Hc * 0.03, 5.0 / Hc * 0.1, 4.6 / Hc * 0.4], bO: [0, 0, 0], g: [0.72, 0.72, 0.74], HR: 15900, HM: Hc, top: 120000 };
+      P.cloud = { cov: 1.0, alt: 52000, scale: 30000, col: [1.0, 0.86, 0.52] };
+      P.col1 = [0.2, 0.16, 0.12]; P.col2 = [0.36, 0.3, 0.24];
+      P.descentDur = 16;
+      P.diff = [0.05, 0.03, 0.008];          // ~3 % солнечного света доходит до дна рассеянным, синий поглощён
+      P.notes.push('CO₂ 92 бар и облака серной кислоты (48–70 км): диска Солнца не видно, у поверхности — густой оранжевый полумрак и +465 °C.');
     } else if (id === 'io') {
       Object.assign(P, { style: 4, relief: 3000, hill: 200, terr: [0, 0, 0.4, 0.6] });
     } else if (id === 'moon' || id === 'mercury') {
@@ -159,6 +173,59 @@
     return P;
   }
 
+  /* ---------- профиль погружения: облачные ярусы, дымка, цвета, ветер, молнии (по данным планеты и звезды) ---------- */
+  function aeroProfile(b, P) {
+    const t = b.type, id = b.id, T = b.temp || b.teq || 0, exo = b.exo || [0, 0, 0, 0];
+    const lin = (c) => c.map((x) => Math.pow(Math.max(x, 0), 2.2));
+    const mix = (a, c, k) => a.map((x, i) => x + (c[i] - x) * k);
+    const col1 = b.col1 || [0.85, 0.8, 0.7], col2 = b.col2 || [0.6, 0.45, 0.32], col3 = b.col3 || col2;
+    const hot = (t === 14 && (exo[0] === 2 || T > 1000));
+    const A = { style: 0, H: 27, deck: [0.1, 0.75, 0.15, 2.6], deck2: [-1.6, -0.85, 0.9, 0], hazeK: 0.06, tau0: 0.6, glow: 0, wind: 0.12,
+      camAlt: -0.3, zMin: -1.9, lightning: 0, ring: null, ext: [0.8, 1.0, 1.3] };
+    A.c2 = lin(mix(col1, [1, 1, 1], 0.3)); A.c1 = lin(col2); A.c3 = lin(col2).map((x) => x * 0.35);
+    A.skyC = [0.3, 0.5, 1.0]; A.haze = [0.95, 0.82, 0.62];
+    if (t === 15) {
+      // океан магмы: чёрные плиты базальтовой корки дрейфуют по расплаву; дым, пепел и искры
+      Object.assign(A, { style: 3, H: 8, deck: [0.0, 0.9, -1, 1], deck2: [0, 0, 0, 0], hazeK: 0.22, tau0: 0.35, glow: U.clamp(exo[1] || 1, 0.6, 1.6), wind: 0.002,
+        camAlt: 0.03, zMin: 0.0025, ext: [0.9, 1.0, 1.25], skyC: [0.4, 0.33, 0.3], haze: [0.42, 0.3, 0.24] });
+      A.c1 = A.c2 = A.c3 = [0.2, 0.18, 0.16];
+      A.title = 'океаном магмы';
+    } else if (t === 12) {
+      // водный мир: бескрайний океан, кучевые облака, солнечная дорожка; небо — по спектру звезды
+      const sc = P.sunCol;
+      Object.assign(A, { style: 4, H: 8, deck: [0.16, 0.55, 0.22, 0.3], deck2: [0, 0, 0, 0], hazeK: 0.1, tau0: 0.25, wind: 0.01,
+        camAlt: 0.06, zMin: 0.003, ext: [0.55, 1.0, 2.0] });
+      A.skyC = [0.3 * (0.6 + 0.4 * sc[0]), 0.55 * (0.7 + 0.3 * sc[1]), 1.0 * (0.5 + 0.5 * sc[2])];
+      A.haze = [0.85, 0.9, 1.0]; A.c1 = [0.82, 0.84, 0.88]; A.c2 = [0.95, 0.95, 0.96]; A.c3 = [0.4, 0.42, 0.46];
+      A.title = 'океаном';
+    } else if (hot) {
+      // горячий юпитер: раскалённая стратосфера, облака из силикатов и железа несутся со скоростью км/с
+      const glow = U.clamp((T - 900) / 1000, 0.2, 1.3);
+      Object.assign(A, { style: 2, H: U.clamp(27 * T / 165, 60, 450), deck: [0.0, 0.55, 0.02, 0.35], deck2: [-1.2, -0.55, 0.0, 3.5], hazeK: 0.045, tau0: 0.4,
+        glow: glow * 0.5, wind: 2.5, camAlt: 0.8, zMin: -1.8, ext: [0.6, 1.15, 2.0], skyC: [1.0, 0.28, 0.1], haze: [1.0, 0.48, 0.18] });
+      A.c2 = [1.0, 0.62, 0.26]; A.c1 = [0.5, 0.12, 0.05]; A.c3 = [0.2, 0.04, 0.02];
+    } else if (t === 6 || t === 7 || t === 17) {
+      // ледяные гиганты и мини-нептуны: метан гасит красный — бирюзовая/кобальтовая дымка, высокие перистые облака
+      const atm = (b.atmo && b.atmo.length >= 3) ? b.atmo.slice(0, 3) : [0.45, 0.7, 1.0];
+      const warm = t === 17 && T > 330;
+      Object.assign(A, { style: 1, H: t === 6 ? 27.7 : t === 7 ? 19.7 : U.clamp(25 * Math.max(T, 60) / 70, 20, 220),
+        deck: [0.5, 0.85, 0.28, 3.0], deck2: [-1.4, -0.9, 0.0, 4.0], hazeK: warm ? 0.16 : 0.08, tau0: warm ? 1.1 : 0.9, wind: t === 7 ? 0.5 : 0.25,
+        camAlt: 0.15, zMin: -1.6, ext: warm ? [0.9, 1.0, 1.2] : [1.7, 0.85, 0.55], lightning: 0.15 });
+      A.skyC = lin(atm).map((x) => x * 1.4); A.haze = lin(mix(atm, [1, 1, 1], 0.35));
+      A.c2 = [0.95, 0.97, 1.0]; A.c1 = lin(mix(col1, [1, 1, 1], 0.4)); A.c3 = lin(col2).map((x) => x * 0.5);
+    } else {
+      // газовые гиганты: аммиачные облака (верхний ярус), NH₄SH (ниже), башни конвекции, молнии в водяных облаках
+      const H = id === 'jupiter' ? 27 : id === 'saturn' ? 59.5 : U.clamp(27 * Math.max(T, 100) / 165, 25, 160);
+      Object.assign(A, { H, lightning: 1, wind: id === 'saturn' ? 0.4 : 0.15 });
+      if (id === 'saturn') { A.hazeK = 0.1; A.tau0 = 1.0; A.haze = [1.0, 0.88, 0.6]; }
+      if (T > 150 && T <= 350 && t === 14) { A.c2 = [0.95, 0.96, 1.0]; A.skyC = [0.3, 0.5, 1.0]; }       // облака водяного льда
+      else if (T > 350 && t === 14) { A.deck[2] = -0.25; A.hazeK = 0.04; A.skyC = [0.25, 0.42, 1.0]; A.ext = [1.2, 1.0, 0.9]; }  // чистое синее небо
+    }
+    if (b.ring && A.style <= 1) A.ring = { ri: b.ring[0], ro: b.ring[1], a: Math.min(b.ring[2] || 0.5, 1) * 0.85, col: lin(b.ringCol || [0.8, 0.72, 0.6]) };
+    A.zMax = A.style >= 3 ? 400 : 40;      // выше — выход в космос (в H)
+    return A;
+  }
+
   /* ---------- атмосфера на CPU (та же модель, что в шейдере неба): пропускание к звезде, свет неба ---------- */
   function raySph(o, d, c, r) {
     const oc = v3.sub(o, c), b = v3.dot(oc, d), cc = v3.dot(oc, oc) - r * r, h = b * b - cc;
@@ -222,7 +289,11 @@
       this.descent = null; this.pending = null;
       this.sunT = [1, 1, 1]; this.veil = 1; this.amb = [0, 0, 0];
       this.ready = false;
+      this.mode = 'land'; this.aero = null; this.aeroMix = 0; this.flashes = []; this.altCmd = 0;
     }
+    isDivable(b) { return !!b && (b.kind === 'planet' || b.kind === 'moon') && DIVE.has(b.type) && (b.type !== 12 || !b.system.isSolar); }
+    // тело под камерой не рисуется обычным рендером, пока его полностью заменяет ландшафт/атмосфера
+    hidesBody() { return this.mode !== 'aero' || this.aeroMix > 0.985; }
     isLandable(b) { return !!b && (b.kind === 'planet' || b.kind === 'moon') && LANDABLE.has(b.type) && !(b.type === 13 && b.exo && b.exo[0] === 2); }
     enterAlt(b) {
       const R = (b.radiusKm || b.radius * MW.C.LY_KM) * 1000;
@@ -240,6 +311,8 @@
         comp: glc.program('surfComp', G.fullscreenVS, G.surfCompFS),
         query: glc.program('terrQuery', G.fullscreenVS, G.terrQueryFS),
         post: glc.program('surfPost', G.fullscreenVS, G.surfPostFS),
+        aero: glc.program('aero', G.fullscreenVS, G.aeroFS),
+        aeroComp: glc.program('aeroComp', G.fullscreenVS, G.aeroCompFS),
       };
       this.ext = r.gl.getExtension('KHR_parallel_shader_compile');
     }
@@ -304,11 +377,12 @@
       this.makeVents();
       this.devils = [];
       this.sunT = [1, 1, 1]; this.veil = 1;
+      this.mode = 'land'; this.aero = null; this.aeroMix = 1; this.horizonSun = undefined;
       if (this.app.ui) this.app.ui.onSurface(true);
     }
     exit() {
       if (!this.active) return;
-      this.active = false; this.descent = null;
+      this.active = false; this.descent = null; this.mode = 'land'; this.aero = null;
       this.app.scene.surfaceBody = null;
       this.app.cam.vel = [0, 0, 0];
       if (this.app.ui) this.app.ui.onSurface(false);
@@ -350,6 +424,7 @@
         let sc = -Math.abs(el - want) / DEG;
         const lat = Math.asin(z) / DEG;
         if (Math.abs(lat) > 62) sc -= 30;
+        if (opts && opts.lat !== undefined) sc -= Math.abs(Math.abs(lat) - opts.lat) * 0.5;
         if (par && b.radius < b.parentBody.radius) {
           const ep = Math.asin(U.clamp(v3.dot(n, par), -1, 1)) / DEG;
           sc -= Math.abs(ep - 30) * 0.4;
@@ -409,7 +484,7 @@
       const side = v3.norm(v3.cross(fh, up));
       const f = v3.norm(v3.add(v3.add(v3.scale(fh, Math.cos(18 * DEG)), v3.scale(side, -Math.sin(18 * DEG))), v3.scale(up, 0.06)));
       const qEnd = Q.lookRotation(f, up);
-      this.descent = { t: 0, dur: 7.5, alt0: Math.max(r0 - p.R - (this.hValid ? this.hG : 0), EYE * 2), q0: this.qb.slice(), qEnd, site };
+      this.descent = { t: 0, dur: p.descentDur || 7.5, alt0: Math.max(r0 - p.R - (this.hValid ? this.hG : 0), EYE * 2), q0: this.qb.slice(), qEnd, site };
       this.hValid = false;
       if (this.app.ui) this.app.ui.toast('🛬 Снижение: ' + b.name);
     }
@@ -420,7 +495,10 @@
       if (this.pending) {
         const b = this.pending.body;
         if (!cam.auto) {
-          if (cam.anchor === b && v3.dist(cam.pos, b.pos) < b.radius * 3) { this.enter(b); this.startDescent(this.pending.site); }
+          if (cam.anchor === b && v3.dist(cam.pos, b.pos) < b.radius * 3) {
+            if (this.pending.aero) this.enterAero(b, this.pending.site);
+            else { this.enter(b); this.startDescent(this.pending.site); }
+          }
           this.pending = null;
         }
       }
@@ -432,10 +510,18 @@
           const R = (b.radiusKm || b.radius * MW.C.LY_KM) * 1000;
           const p = b === this.body && this.prof ? this.prof : profile(b);
           if (altM < Math.max(0.05 * R, p.atm ? Math.min(p.atm.top, 0.3 * R) : 0)) this.enter(b);
+        } else if (b && this.isDivable(b) && !this.isLandable(b)) {
+          // гигант без поверхности: ниже ~2 % радиуса камера сама переходит в полёт в атмосфере
+          const altM = (v3.dist(cam.pos, b.pos) - b.radius) * LY_M;
+          if (altM < 0.02 * (b.radiusKm || b.radius * MW.C.LY_KM) * 1000) {
+            const A = aeroProfile(b, profile(b));
+            if (altM < A.zMax * 0.75 * A.H * 1000) this.enterAero(b, null);
+          }
         }
         if (!this.active) return false;
       }
       if (cam.auto) { this.exit(); return false; }
+      if (this.mode === 'aero') return this.updateAero(dt);
       const b = this.body, p = this.prof, R = p.R;
       const ax = bodyAxes(b), qBody = Q.fromBasis(ax.x, ax.y, ax.z);
       let P = this.P;
@@ -518,6 +604,240 @@
       this.sync(b, ax, qBody, P, v3.len(P) - R - hG);
       return true;
     }
+    /* ---------- погружение в атмосферу ---------- */
+    dive(b) {
+      if (!this.isDivable(b)) return false;
+      // Венера и венероподобные: спуск сквозь облака на раскалённую равнину — режим посадки с их атмосферой
+      if (b.type === 1) return this.land(b);
+      const cam = this.app.cam, ui = this.app.ui;
+      this.initGL(this.app.renderer);
+      const altR = v3.dist(cam.pos, b.pos) / b.radius - 1;
+      if ((this.active && this.body === b) || (cam.anchor === b && altR < 0.35)) {
+        if (!(this.active && this.body === b && this.mode === 'aero')) { this.exit(); this.enterAero(b, null); }
+        this.startAeroDescent(v3.norm(this.P));
+        return true;
+      }
+      this.exit();
+      const prof = profile(b), aer = aeroProfile(b, prof);
+      const site = this.chooseSite(b, { sunElev: aer.style === 2 ? 40 : aer.style >= 3 ? 18 : 22, lat: aer.ring ? 25 : undefined });
+      const target = { obj: b, body: b, name: b.name, getPos: () => b.pos, arrive: b.radius * 1.7, get viewDir() { return toWorld(bodyAxes(b), site); } };
+      this.app.scene.lastCam = cam.pos;
+      cam.flyTo(target);
+      this.pending = { body: b, site, aero: true };
+      if (ui) ui.toast('🪂 Погружение в атмосферу: ' + b.name + ' — выход на точку входа…');
+      return true;
+    }
+    enterAero(b, site) {
+      this.enter(b);
+      this.mode = 'aero';
+      this.aero = aeroProfile(b, this.prof);
+      this.flashes = [];
+      this.horizonSun = -90;
+      this.aeroMix = 0;
+      if (site) this.startAeroDescent(site);
+      if (this.app.ui) this.app.ui.onSurface(true);
+    }
+    // взгляд у горизонта, чуть в сторону от звезды; спуск по логарифму высоты до облачной палубы
+    startAeroDescent(site) {
+      const b = this.body, A = this.aero, R = this.prof.R, Hm = A.H * 1000;
+      const ax = bodyAxes(b);
+      const r0 = v3.len(this.P);
+      const sunB = toBody(ax, v3.norm(v3.sub(b.system.star.pos, b.pos)));
+      let fh = v3.sub(sunB, v3.scale(site, v3.dot(sunB, site)));
+      if (v3.len(fh) < 1e-3) fh = v3.cross(site, [1, 0, 0]);
+      fh = v3.norm(fh);
+      const side = v3.norm(v3.cross(fh, site)), ang = (A.style === 2 ? 8 : 28) * DEG;
+      const f = v3.norm(v3.add(v3.add(v3.scale(fh, Math.cos(ang)), v3.scale(side, -Math.sin(ang))), v3.scale(site, A.style >= 3 ? -0.08 : A.style === 2 ? 0.12 : 0.04)));
+      this.descent = { aero: true, t: 0, dur: A.style >= 3 ? 9 : 11, alt0: r0 - R, alt1: A.camAlt * Hm, q0: this.qb.slice(), qEnd: Q.lookRotation(f, site), site };
+      if (this.app.ui) this.app.ui.toast('🪂 Спуск сквозь атмосферу: ' + b.name);
+    }
+    updateAero(dt) {
+      const app = this.app, cam = app.cam, k = cam.keys;
+      const b = this.body, A = this.aero, R = this.prof.R, Hm = A.H * 1000;
+      const ax = bodyAxes(b), qBody = Q.fromBasis(ax.x, ax.y, ax.z);
+      let P = this.P;
+      const up = v3.norm(P);
+      if (this.descent) {
+        const d = this.descent;
+        d.t += dt;
+        const s = Math.min(d.t / d.dur, 1), e = s * s * s * (s * (s * 6 - 15) + 10);
+        const off = 3 * Hm - Math.min(A.zMin * Hm, 0);
+        const a = Math.exp(Math.log(d.alt0 + off) + (Math.log(d.alt1 + off) - Math.log(d.alt0 + off)) * e) - off;
+        P = v3.scale(d.site, R + a);
+        this.qb = Q.slerp(d.q0, d.qEnd, U.smoothstep(0.15, 0.9, s));
+        cam.mouseLook = [0, 0];
+        if (s >= 1 || (k.size && d.t > 0.5)) {
+          this.descent = null;
+          if (s >= 1 && app.ui) app.ui.toast(b.name + ': полёт в атмосфере. WASD — лететь, R/F или ▲▼ — выше/ниже, мышь — осмотр');
+        }
+      } else {
+        const sens = cam.fov / 60 * 0.0028 * 60 * 0.0166;
+        const mx = cam.mouseLook[0] * sens, my = cam.mouseLook[1] * sens;
+        cam.mouseLook = [0, 0]; cam.orbitDelta = [0, 0]; cam.panDelta = [0, 0];
+        const kr = 1.2 * dt;
+        let yaw = -mx, pitch = -my;
+        if (k.has('ArrowLeft')) yaw += kr;
+        if (k.has('ArrowRight')) yaw -= kr;
+        if (k.has('ArrowUp') && !k.has('ShiftLeft')) pitch += kr;
+        if (k.has('ArrowDown') && !k.has('ShiftLeft')) pitch -= kr;
+        let qb = this.qb;
+        if (yaw) qb = Q.mul(Q.axisAngle(up, yaw), qb);
+        if (pitch) {
+          const rt = Q.rot(qb, [1, 0, 0]);
+          const q2 = Q.mul(Q.axisAngle(rt, pitch), qb);
+          if (Math.abs(v3.dot(Q.rot(q2, [0, 0, -1]), up)) < 0.985) qb = q2;
+        }
+        const f = Q.rot(qb, [0, 0, -1]);
+        let fh = v3.sub(f, v3.scale(up, v3.dot(f, up)));
+        fh = v3.len(fh) < 1e-4 ? Q.rot(qb, [0, 1, 0]) : v3.norm(fh);
+        const rh = v3.norm(v3.cross(fh, up));
+        const inp = [0, 0, this.altCmd];
+        if (k.has('KeyW')) inp[0] += 1;
+        if (k.has('KeyS')) inp[0] -= 1;
+        if (k.has('KeyD')) inp[1] += 1;
+        if (k.has('KeyA')) inp[1] -= 1;
+        if (k.has('KeyR') || k.has('Space')) inp[2] += 1;
+        if (k.has('KeyF') || k.has('KeyC')) inp[2] -= 1;
+        const alt = v3.len(P) - R;
+        const boost = k.has('ShiftLeft') || k.has('ShiftRight') ? 8 : 1;
+        // аэростат над жидкостью — метры в секунду; у облачной палубы гиганта — доли шкалы высот
+        const sp = (A.style >= 3 ? Math.max(15, alt * 0.6) : Hm * 0.04 + Math.max(0, alt) * 0.3) * cam.throttle * boost;
+        const tgt = v3.add(v3.add(v3.scale(fh, inp[0] * sp), v3.scale(rh, inp[1] * sp)), v3.scale(up, inp[2] * sp * (A.style >= 3 ? 1 : 0.6)));
+        const bl = 1 - Math.exp(-dt / (inp[0] || inp[1] || inp[2] ? 0.35 : 0.25));
+        this.vel = v3.lerp(this.vel, tgt, bl);
+        P = v3.add(P, v3.scale(this.vel, dt));
+        if (this.nudge[0] || this.nudge[1] || this.nudge[2]) {
+          const sc = A.style >= 3 ? Math.max(alt, 20) : Hm * 0.3;
+          P = v3.add(P, v3.add(v3.add(v3.scale(fh, this.nudge[0] * sc), v3.scale(rh, this.nudge[1] * sc)), v3.scale(up, this.nudge[2] * sc)));
+          this.nudge = [0, 0, 0];
+        }
+        const f2 = Q.rot(qb, [0, 0, -1]);
+        if (Math.abs(v3.dot(f2, up)) < 0.995) qb = Q.slerp(qb, Q.lookRotation(f2, up), 1 - Math.exp(-dt / 0.3));
+        this.qb = Q.norm(qb);
+        if (alt > A.zMax * Hm) { this.sync(b, ax, qBody, P, alt); this.exit(); return true; }
+      }
+      // не глубже нижнего яруса (давление там уже сотни бар) и не ниже ~20 м над жидкостью
+      const rr = v3.len(P), minR = R + A.zMin * Hm;
+      if (rr < minR) { P = v3.scale(P, minR / rr); const vr = v3.dot(this.vel, up); if (vr < 0) this.vel = v3.sub(this.vel, v3.scale(up, vr)); }
+      this.P = P;
+      this.sync(b, ax, qBody, P, v3.len(P) - R);
+      this.updateFlashes(dt);
+      return true;
+    }
+    // молнии: короткие мерцающие вспышки в нижнем ярусе на 1–9 шкал высот от наблюдателя
+    updateFlashes(dt) {
+      const A = this.aero;
+      this.flashes = this.flashes.filter((f) => (f.t += dt) < f.dur);
+      if (!A.lightning) return;
+      const rnd = Math.random;
+      if (this.flashes.length < 3 && rnd() < dt * 0.9 * A.lightning) {
+        const n0 = v3.norm(this.P), E = v3.perp(n0), N = v3.cross(n0, E);
+        const az = rnd() * Math.PI * 2, dist = A.H * (1.2 + rnd() * 8) * 1000;
+        const h = (A.deck2[0] + 0.2 + rnd() * 0.4) * A.H * 1000;
+        const base = v3.add(v3.scale(E, Math.cos(az) * dist), v3.scale(N, Math.sin(az) * dist));
+        const pB = v3.add(v3.scale(n0, this.prof.R + h), base);
+        this.flashes.push({ pB, t: 0, dur: 0.2 + rnd() * 0.5, I: 0.6 + rnd() * 1.6, ph: rnd() * 50 });
+      }
+    }
+    aeroTargets(r, div) {
+      const gl = r.gl;
+      const w = Math.max(16, Math.round(r.width / div)), h = Math.max(16, Math.round(r.height / div));
+      if (this.aT && this.aT.w === w && this.aT.h === h) return this.aT;
+      if (this.aT) { gl.deleteFramebuffer(this.aT.fbo); gl.deleteTexture(this.aT.tIn); gl.deleteTexture(this.aT.tT); }
+      const tIn = r.glc.texture2D(w, h, {}), tT = r.glc.texture2D(w, h, {});
+      const fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tIn, 0);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, tT, 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this.aT = { fbo, tIn, tT, w, h };
+      return this.aT;
+    }
+    renderAero(r, target) {
+      const gl = r.gl, glc = r.glc, A = this.aero, b = this.body, p = this.prof, sc = this.app.scene;
+      const ax = bodyAxes(b);
+      const P = this.P, camR = v3.len(P), n0 = v3.scale(P, 1 / camR);
+      let E = v3.cross([0, 0, 1], n0);
+      E = v3.len(E) < 1e-6 ? [1, 0, 0] : v3.norm(E);
+      const N = v3.cross(n0, E);
+      const altKm = (camR - p.R) / 1000, H = A.H;
+      // переход: с высоты ~40 H видна обычная планета, к ~15 H — облака вокруг
+      this.aeroMix = 1 - U.smoothstep(15 * H, 40 * H, altKm);
+      if (this.aeroMix < 0.003) return target;
+      const sunB = toBody(ax, v3.norm(v3.sub(b.system.star.pos, b.pos)));
+      const sunL = [v3.dot(sunB, E), v3.dot(sunB, N), v3.dot(sunB, n0)];
+      const sunE = p.sunCol.map((c) => c * p.sunE);
+      const hn = altKm / H;
+      // пропускание к звезде (для бликов и «дневного» неба) — та же оценка, что в шейдере
+      const tauS = A.tau0 * Math.exp(-Math.max(hn, -3) * 0.9) / Math.max(sunL[2] + 0.12, 0.08);
+      this.sunT = A.ext.map((e) => Math.exp(-tauS * e) * U.smoothstep(-0.05, 0.05, sunL[2]));
+      const day = U.smoothstep(-0.2, 0.08, sunL[2]);
+      this.veil = 1 / (1 + 30 * day * (1 - Math.exp(-A.tau0 * Math.exp(-Math.max(hn, -3) * 0.9))));
+      const Tq = MW.Q.terrain || {};
+      const div = A.style >= 3 ? (MW.QUALITY === 'ultra' ? 1 : 2) : (Tq.skyDiv || 2);
+      const tg = this.aeroTargets(r, div);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, tg.fbo); gl.viewport(0, 0, tg.w, tg.h);
+      glc.noBlend();
+      const s = r.common(this.progs.aero);
+      s.set('u_res', [tg.w, tg.h]);
+      const Ew = toWorld(ax, E), Nw = toWorld(ax, N), Uw = toWorld(ax, n0);
+      s.set('u_w2l', f32([Ew[0], Nw[0], Uw[0], Ew[1], Nw[1], Uw[1], Ew[2], Nw[2], Uw[2]]));
+      s.set('u_style', A.style);
+      s.set('u_R', p.R / 1000); s.set('u_alt', altKm); s.set('u_H', H);
+      s.set('u_sunL', f32(sunL)); s.set('u_sunE', f32(sunE));
+      s.set('u_c1', f32(A.c1)); s.set('u_c2', f32(A.c2)); s.set('u_c3', f32(A.c3));
+      s.set('u_skyC', f32(A.skyC)); s.set('u_haze', f32(A.haze)); s.set('u_ext', f32(A.ext));
+      s.set('u_hazeK', A.hazeK); s.set('u_tau0', A.tau0);
+      s.set('u_deck', f32(A.deck)); s.set('u_deck2', f32(A.deck2));
+      const rt = sc.realTime;
+      // ветер вдоль параллели (на восток = +x локально); видимая скорость усилена для наглядности
+      const wk = A.wind * rt * 4;
+      s.set('u_wind', f32([-wk, 0]));
+      s.set('u_t', rt);
+      if (A.ring) {
+        s.set('u_ring', f32([A.ring.ri, A.ring.ro, A.ring.a, 1]));
+        s.set('u_ringN', f32([E[2], N[2], n0[2]])); s.set('u_ringC', f32(A.ring.col));
+      } else s.set('u_ring', f32([0, 0, 0, 0]));
+      const fl = new Float32Array(12);
+      this.flashes.forEach((f, i) => {
+        if (i > 2) return;
+        const d = v3.scale(v3.sub(f.pB, P), 1 / 1000);
+        const fk = Math.pow(Math.max(0, Math.sin(f.t / f.dur * Math.PI)), 0.5) * (0.6 + 0.4 * Math.sin(f.t * 90 + f.ph));
+        fl.set([v3.dot(d, E), v3.dot(d, N), v3.dot(d, n0), f.I * fk * p.sunE * 0.6], i * 4);
+      });
+      s.set('u_fl', fl);
+      s.set('u_glow', A.glow);
+      const st = Tq.skySteps || 12;
+      s.set('u_steps', Math.round(A.style >= 3 ? st * 2 : st * 3.5));
+      s.set('u_lightN', st >= 10 ? 2 : 1);
+      s.set('u_pixAng', 2 * r.tanHalf / tg.h);
+      gl.bindVertexArray(glc.emptyVAO); gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      const other = (t) => (t === r.tA ? r.tB : r.tA);
+      let src = target;
+      const dst = other(src);
+      glc.bindTarget(dst); glc.noBlend();
+      const c = this.progs.aeroComp.use();
+      c.tex('u_src', src.tex); c.tex('u_skyIn', tg.tIn); c.tex('u_skyT', tg.tT);
+      c.set('u_veil', this.veil); c.set('u_mixK', this.aeroMix); c.set('u_blur', A.style >= 3 ? 0.6 : 1.5);
+      glc.fullscreen();
+      src = dst;
+      // океан магмы: марево раскалённого воздуха, пепел и искры
+      if (A.style === 3) {
+        const d2 = other(src);
+        glc.bindTarget(d2); glc.noBlend();
+        const q = this.progs.post.use();
+        q.tex('u_src', src.tex);
+        q.set('u_time', rt); q.set('u_heat', 1); q.set('u_ash', 0.7); q.set('u_aspect', r.aspect); q.set('u_tanHalf', r.tanHalf);
+        const cr = r.cam.right, cu = r.cam.up, cb = v3.scale(r.cam.forward, -1);
+        q.set('u_upV', f32([v3.dot(cr, Uw), v3.dot(cu, Uw), v3.dot(cb, Uw)]));
+        glc.fullscreen();
+        src = d2;
+      }
+      this.sunUp = U.smoothstep(-0.05, 0.15, sunL[2]);
+      return src;
+    }
     sync(b, ax, qBody, P, alt) {
       const cam = this.app.cam;
       cam.pos = v3.add(b.pos, v3.scale(toWorld(ax, P), 1 / LY_M));
@@ -540,6 +860,7 @@
     /* ---------- отрисовка: небо, ландшафт, марево ---------- */
     render(r, target) {
       if (!this.active || !this.glReady()) return target;
+      if (this.mode === 'aero') return this.renderAero(r, target);
       const gl = r.gl, glc = r.glc, p = this.prof, b = this.body, sc = this.app.scene;
       if (!this.mesh) this.buildMesh(r);
       // карта альбедо орбитального шейдера (один раз на тело / при загрузке реальной карты)
@@ -584,9 +905,9 @@
         const z = ev([0, 0, 1]);
         const hs = [[1, 0, 0.25], [-1, 0, 0.25], [0, 1, 0.25], [0, -1, 0.25]].map(ev);
         const avg = [0, 1, 2].map((i) => 0.4 * z.In[i] + 0.15 * hs.reduce((s, h) => s + h.In[i], 0));
-        this._amb = avg.map((x) => x * Math.PI * 1.6);
+        this._amb = avg.map((x, i) => x * Math.PI * 1.6 + (p.diff ? p.diff[i] * sunE[i] * Math.PI * 4.0 : 0));
         this.sunT = z.sunT;
-        const lz = 0.2126 * z.In[0] + 0.7152 * z.In[1] + 0.0722 * z.In[2];
+        const lz = 0.2126 * z.In[0] + 0.7152 * z.In[1] + 0.0722 * z.In[2] + (p.diff ? 0.2126 * p.diff[0] * sunE[0] + 0.7152 * p.diff[1] * sunE[1] : 0);
         this.veil = 1 / (1 + 600 * lz);
         this.skyLum = lz;
       } else if (!p.atm) {
@@ -634,6 +955,7 @@
         const lat = Math.abs(Math.asin(U.clamp(n0[2], -1, 1))) / DEG;
         const aur = p.aurora ? U.smoothstep(50, 64, lat) * U.smoothstep(-4, -12, Math.asin(U.clamp(sunL[2], -1, 1)) / DEG) : 0;
         s.set('u_aur', f32([aur * (this.auroraBoost || 1), sc.realTime, 0, 0]));
+        s.set('u_diff', f32(p.diff ? p.diff.map((d, i) => d * sunE[i] * U.smoothstep(-0.25, 0.1, sunL[2])) : [0, 0, 0]));
         this.setPlumes(s, p, n0, E, N, windB, sunL);
         gl.bindVertexArray(glc.emptyVAO); gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -657,7 +979,7 @@
         s.set('u_camR', camR); s.set('u_Rg', Rg); s.set('u_Rt', Rg + 1);
         s.set('u_bR', f32([0, 0, 0])); s.set('u_bMs', f32([0, 0, 0])); s.set('u_bMa', f32([0, 0, 0])); s.set('u_bO', f32([0, 0, 0])); s.set('u_gM', f32([0.5, 0.5, 0.5]));
         s.set('u_H', f32([8000, 8000])); s.set('u_sunL', f32(sunL)); s.set('u_sunE', f32(sunE)); s.set('u_steps', 1);
-        s.set('u_cloud', f32([0, 0, 0, 1])); s.set('u_aur', f32([0, 0, 0, 0])); s.set('u_wt', wt);
+        s.set('u_cloud', f32([0, 0, 0, 1])); s.set('u_aur', f32([0, 0, 0, 0])); s.set('u_wt', wt); s.set('u_diff', f32([0, 0, 0]));
         this.setPlumes(s, p, n0, E, N, windB, sunL);
         gl.bindVertexArray(glc.emptyVAO); gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);

@@ -36,17 +36,23 @@ flat out float v_I;
 flat out float v_pr;
 flat out float v_fade;
 flat out float v_boost;
+flat out vec4 v_morph;
+uniform float u_pano;       // 0..1: вес фотопанорамы неба (соседние галактики уже есть на ней)
 void main(){
   vec3 rel = (a_hi - u_camHi) + (a_lo - u_camLo);
   float D = max(length(rel), 1e-30);
   float R = a_par.x;
-  // флаги в сиде (сотни): 1 — оценочное расстояние, 2 — ближняя «ориентирная» галактика, 4 — дубль частичной модели (M31, M33)
+  // флаги в сиде (сотни): 1 — оценочное расстояние, 2 — ближняя «ориентирная» галактика, 4 — дубль модели из частиц (M31, M81…)
   float fl = floor(a_par.z / 100.0);
   float est = mod(fl, 2.0), boost = mod(floor(fl / 2.0), 2.0), farOnly = floor(fl / 4.0);
+  // морфология галактики зашита в длину нормали: |n| = 1 + код + 0,98·q; код = стадия + 8·бар + 24·особая модель
+  float mL = max(length(a_nrm) - 1.0, 0.0), mc = floor(mL + 1e-3);
+  v_morph = vec4(mod(mc, 8.0), mod(floor(mc / 8.0), 3.0), floor(mc / 24.0), clamp((mL - mc) / 0.98, 0.0, 1.0));
   // Ближние ключевые галактики (M31, M33, M81, M82, NGC 253, Центавр A, M101, M51, M104) на 0,3 – 40 млн св. лет —
-  // крупнее и ярче (объёмный балдж и мягкое гало), чтобы вылет из Млечного Пути не превращал их в 2-пиксельные точки
+  // крупнее и ярче, пока они малы на экране (иначе вылет из Млечного Пути превращал их в 2-пиксельные точки);
+  // при подлёте — в истинном размере, объёмной моделью
   float bk = boost * smoothstep(2e5, 1.5e6, D) * (1.0 - smoothstep(4e7, 9e7, D));
-  R *= 1.0 + 0.7 * bk;
+  R *= 1.0 + 0.7 * bk * (1.0 - smoothstep(0.004, 0.03, a_par.x / D));
   v_boost = bk;
   // фон, занимающий больше ~2° неба, при фокусе на близкой планете рисуется меньше (не «нависает» над ней)
   R *= 1.0 - u_bgShrink * 0.6 * smoothstep(0.03, 0.15, R / D);
@@ -58,8 +64,11 @@ void main(){
   // при взгляде на Галактику со стороны. Они видны, пока камера рядом с Солнцем, и гаснут при удалении.
   float distS = length(a_hi + a_lo), camS = length(u_camHi + u_camLo);
   v_fade = est > 0.5 ? 1.0 - smoothstep(distS * 0.08, distS * 0.3, camS) : 1.0;
-  // дубль галактики-частиц (M31, M33, M81…): проявляется, когда модель из частиц сжимается в точку
-  if (farOnly > 0.5) v_fade *= smoothstep(a_par.x * 25.0, a_par.x * 60.0, D);
+  // но при подлёте к самому объекту (его выбрали целью) он виден всегда
+  v_fade = max(v_fade, 1.0 - smoothstep(a_par.x * 20.0, a_par.x * 80.0, D));
+  // дубль галактики-частиц (M31, M33, M81…) — объёмная модель на любом расстоянии; пока видна фотопанорама
+  // (у Солнца), он приглушён так же, как частицы, чтобы галактика на снимке неба не двоилась
+  if (farOnly > 0.5) v_fade *= 1.0 - 0.9 * u_pano;
   if (v_fade < 0.003){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   v_rel = rel; v_nrm = a_nrm; v_col = a_col; v_par = vec4(R, a_par.y, a_par.z - fl * 100.0, a_par.w); v_I = I; v_pr = pr;
   // далёкие тусклые точки не рисуем
@@ -68,12 +77,14 @@ void main(){
   // вблизи (или когда объект сбоку/позади) — весь экран: квад иначе пересёк бы плоскость камеры,
   // и объём (остаток сверхновой, туманность) обрезался бы прямой линией
   bool vol = a_par.y > 2.5 && a_par.y < 6.5;
-  if (D < R * (vol ? 2.4 : 1.08) || (vol && pv.z > -R * 1.4 && pv.z < R && R > D * 0.05)){ gl_Position = vec4(a_corner, 0.0, 1.0); v_px = a_corner * 1e4; return; }
-  if (pv.z > R){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  // у галактик квад охватывает и звёздное гало (до 1,3 R)
+  float Rq = R * (a_par.y < 2.5 ? 1.3 : 1.0);
+  if (D < Rq * (vol ? 2.4 : 1.08) || (vol && pv.z > -R * 1.4 && pv.z < R && R > D * 0.05)){ gl_Position = vec4(a_corner, 0.0, 1.0); v_px = a_corner * 1e4; return; }
+  if (pv.z > Rq){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   // полуразмер квада в плоскости центра: конус касательных к сфере (а не угловой радиус × 1,08)
-  float sinA = min(R / D, 0.999);
+  float sinA = min(Rq / D, 0.999);
   float minPx = vol ? 1.6 : 2.6;   // туманности — строго в реальном угловом размере (точка ≤ 1,6 px — только блеск)
-  float sizeW = max(R / sqrt(1.0 - sinA * sinA) * (D / max(-pv.z, 1e-30)) * 1.04, minPx * u_scale * D / u_pxPerRad);
+  float sizeW = max(Rq / sqrt(1.0 - sinA * sinA) * (D / max(-pv.z, 1e-30)) * 1.04, minPx * u_scale * D / u_pxPerRad);
   float sizePx = sizeW * u_pxPerRad / D;
   pv.xy += a_corner * sizeW;
   v_px = a_corner * sizePx;
@@ -90,8 +101,151 @@ flat in float v_I;
 flat in float v_pr;
 flat in float v_fade;
 flat in float v_boost;
+flat in vec4 v_morph;
 uniform float u_time, u_bright, u_scale;
 out vec4 o;
+float erfA(float x){ return sign(x) * sqrt(1.0 - exp(-x * x * 1.2732395)); }
+/* ---------- галактика: объёмная модель по морфологическому типу ----------
+   Диск (звёзды + пыль) трассируется в тонком слое |z| < 0,08 R: рукава — логарифмические спирали с шагом
+   по стадии Хаббла (Sa — туго закрученные, Sc — раскрытые), бар у SB/SAB, пылевые прожилки на внутренней кромке
+   рукавов, розовые области H II и голубые молодые скопления. Балдж / эллипсоид — проекция профиля Серсика
+   в сжатом по оси пространстве; свет балджа за плоскостью диска гасится пылью (полоса Сомбреро, Центавра A).
+   mo: x стадия (0 E, 1 S0, 2 Sa, 3 Sb, 4 Sc, 5 Sd/Sm, 6 Irr), y бар (1 SAB, 2 SB), z особая модель
+   (1 Сомбреро, 2 Центавр A, 3 M82), w — отношение осей эллиптической. */
+void galDisk(vec2 uv, float zz, float st, float bar, float spc, float sd, out vec3 em, out float du){
+  float r = length(uv), th = atan(uv.y, uv.x);
+  float a = clamp((st - 1.0) / 4.0, 0.0, 1.0);                 // 0 — S0 … 1 — Sd
+  float hS = mix(0.2, 0.32, a) * (st > 5.5 ? 1.15 : 1.0);
+  float armK = st < 1.5 ? 0.0 : st > 5.5 ? 0.0 : mix(0.55, 1.0, smoothstep(0.0, 0.6, a)) * (st > 4.5 ? 0.65 : 1.0);
+  if (spc > 0.5 && spc < 1.5) armK = 0.22;
+  float tanP = mix(0.16, 0.5, a);
+  float young = st < 1.5 ? 0.0 : mix(0.25, 1.0, a);
+  float dustK = st < 1.5 ? 0.12 : mix(1.0, 0.45, a);
+  float flocc = fract(sd * 7.31) < 0.35 ? 0.85 : 0.3;          // флоккулентные — около трети спиралей
+  float n1 = snoise(vec3(uv * 4.5, sd * 31.0));
+  float rBar = bar > 0.5 ? (bar > 1.5 ? 0.3 : 0.2) : 0.0;
+  // рукава начинаются от концов бара; фаза — логарифмическая спираль
+  float ph = th - log(max(r, rBar + 0.03)) / tanP + sd * 6.2831 + 0.4 * n1 * flocc;
+  float aw = 0.5 + 0.5 * cos(2.0 * ph);
+  float arm = pow(aw, mix(5.0, 2.0, flocc)) * smoothstep(rBar * 0.7 + 0.04, rBar + 0.16, r);
+  arm *= mix(1.0, 0.55 + 0.9 * max(n1, 0.0), flocc);
+  float disk = exp(-r / hS) * smoothstep(1.08, 0.7, r);
+  vec3 old = mix(vec3(1.0, 0.78, 0.5), vec3(0.88, 0.82, 0.74), smoothstep(0.05, 0.5, r));
+  vec3 blue = vec3(0.5, 0.66, 1.0);
+  em = disk * (old * (0.25 + 0.55 * (1.0 - armK) + 0.95 * armK * arm) + blue * (young * armK * arm * 2.0 * smoothstep(0.08, 0.35, r)));
+  // бар: вытянутый звёздный эллипсоид
+  if (bar > 0.5){
+    float ba = sd * 3.1;
+    vec2 bu = vec2(cos(ba) * uv.x + sin(ba) * uv.y, -sin(ba) * uv.x + cos(ba) * uv.y);
+    em += vec3(1.0, 0.82, 0.58) * exp(-pow(bu.x / rBar, 2.0) - pow(bu.y / (rBar * 0.28), 2.0)) * (bar > 1.5 ? 0.9 : 0.5);
+  }
+  // области H II и молодые скопления — бусины вдоль рукавов
+  float kn = smoothstep(0.5, 0.88, snoise(vec3(uv * 22.0, sd * 13.0)));
+  em += mix(vec3(1.0, 0.38, 0.6), vec3(0.6, 0.75, 1.0), step(0.5, fract(kn * 7.0 + sd))) * kn * arm * young * disk * 3.0 * smoothstep(0.1, 0.3, r);
+  // пыль: прожилки на внутренней (вогнутой) кромке рукавов + волокна
+  float dl = pow(0.5 + 0.5 * cos(2.0 * ph + 0.65), 7.0) * smoothstep(rBar * 0.6 + 0.03, rBar + 0.12, r);
+  float fil = max(snoise(vec3(uv * 11.0, sd * 5.0 + 3.0)), 0.0);
+  du = dustK * exp(-r / (hS * 1.3)) * smoothstep(1.0, 0.6, r) * (0.25 + 3.0 * dl * armK + 1.3 * fil * (0.4 + armK));
+  // неправильная: клочья звездообразования и пыли
+  if (st > 5.5){
+    float f = snoise(vec3(uv * 3.2, sd * 9.0)) * 0.6 + n1 * 0.4;
+    float cl = smoothstep(-0.3, 0.7, f);
+    em = disk * (vec3(0.82, 0.86, 1.0) * (0.35 + cl) + vec3(0.55, 0.72, 1.0) * kn * 3.0 + vec3(1.0, 0.4, 0.55) * smoothstep(0.75, 0.95, f) * 2.0);
+    du = 0.9 * disk * smoothstep(0.1, 0.8, -f + 0.3) + (spc > 2.5 ? 1.6 * fil * exp(-r / 0.3) : 0.0);
+  }
+  // Сомбреро: массивное пылевое кольцо на краю диска
+  if (spc > 0.5 && spc < 1.5){ du += 3.5 * exp(-pow((r - 0.72) / 0.09, 2.0)) * (0.7 + 0.6 * fil); em *= 0.7; }
+  // Центавр A: пылевой диск с молодыми голубыми скоплениями поперёк эллиптической галактики
+  if (spc > 1.5 && spc < 2.5){
+    // клочья пыли и молодые скопления — объёмные (зависят и от высоты над диском): с ребра без «гребёнки»
+    float cf = snoise(vec3(uv * 3.0, zz * 18.0 + sd * 4.0));
+    float kz = smoothstep(0.55, 0.9, snoise(vec3(uv * 9.0, zz * 40.0 + sd)));
+    em = vec3(0.62, 0.72, 1.0) * kz * 0.8 * smoothstep(0.48, 0.2, r);
+    du = 2.4 * smoothstep(0.52, 0.3, r) * smoothstep(-0.6, 0.4, cf);
+  }
+}
+vec3 galaxy3D(vec3 rd, vec3 C, float R, vec3 N, vec4 mo, float sd, float pr, float ign){
+  float st = mo.x, bar = mo.y, spc = mo.z;
+  vec3 T = normalize(cross(N, abs(N.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
+  vec3 B = cross(N, T);
+  vec3 ro = -C / R;
+  vec3 o3 = vec3(dot(ro, T), dot(ro, B), dot(ro, N)), d = vec3(dot(rd, T), dot(rd, B), dot(rd, N));
+  float bq = dot(o3, d), cq = dot(o3, o3) - 1.69, hq = bq * bq - cq;
+  if (hq < 0.0) return vec3(0.0);
+  hq = sqrt(hq);
+  float t0 = max(-bq - hq, 0.0), t1 = -bq + hq;
+  if (t1 <= 0.0) return vec3(0.0);
+  // ---- сфероид (балдж или эллиптическая): проекция профиля Серсика в сжатом пространстве ----
+  float a = clamp((st - 1.0) / 4.0, 0.0, 1.0);
+  float qb = st < 0.5 ? max(mo.w, 0.3) : spc > 0.5 && spc < 1.5 ? 0.8 : 0.6;
+  if (spc > 1.5 && spc < 2.5) qb = 0.85;
+  float re = st < 0.5 ? 0.3 : spc > 0.5 && spc < 1.5 ? 0.3 : mix(0.11, 0.025, a);
+  float Ib = st < 0.5 ? 0.06 : spc > 0.5 && spc < 1.5 ? 0.09 : mix(0.09, 0.03, a);
+  if (st > 5.5) Ib = 0.0;
+  float nS = st < 0.5 ? 0.4 : 0.55;                              // 1/n: n = 2,5 у эллиптических, ~1,8 у балджей
+  float bn = st < 0.5 ? 4.67 : 3.3;
+  vec3 os = vec3(o3.xy, o3.z / qb), dS = vec3(d.xy, d.z / qb);
+  float dd = dot(dS, dS), tc = -dot(os, dS) / dd;
+  float bmin = length(os + dS * max(tc, 0.0));
+  float x = sqrt(bmin * bmin + 1e-4) / re;
+  vec3 sph = (st < 0.5 ? vec3(1.0, 0.8, 0.6) : vec3(1.0, 0.76, 0.5)) * Ib * exp(-bn * (pow(x, nS) - 1.0)) / sqrt(dd) * (tc < 0.0 ? 0.5 : 1.0);
+  sph *= smoothstep(1.3, 0.9, bmin);
+  // ---- диск: трассировка в слое ----
+  vec3 col = vec3(0.0);
+  float Tr = 1.0, sumG = 0.0, sumTG = 0.0;
+  float zs = st > 5.5 ? 0.14 : 0.08;
+  float ta = t0, tb = t1;
+  bool hasDisk = st > 0.5 || (spc > 1.5 && spc < 2.5);
+  if (hasDisk){
+    if (abs(d.z) > 1e-4){
+      float u1 = (-zs - o3.z) / d.z, u2 = (zs - o3.z) / d.z;
+      ta = max(t0, min(u1, u2)); tb = min(t1, max(u1, u2));
+    } else if (abs(o3.z) > zs) tb = ta - 1.0;
+  }
+  float w = re * 1.2 / sqrt(dd);
+  if (hasDisk && tb > ta){
+    float z0 = st > 5.5 ? 0.05 : st < 1.5 ? 0.03 : 0.02, zd = st > 5.5 ? 0.035 : spc > 1.5 && spc < 2.5 ? 0.04 : spc > 0.5 && spc < 1.5 ? 0.022 : 0.011;
+    int n = int(mix(8.0, 26.0, smoothstep(15.0, 260.0, pr)) * clamp(u_marchK > 0.0 ? sqrt(u_marchK) : 1.0, 0.55, 1.0));
+    if (spc > 0.5) n = max(n, 22);
+    float ds = (tb - ta) / float(n);
+    for (int i = 0; i < 26 + u_zero; i++){
+      if (i >= n) break;
+      float tt = ta + ds * (float(i) + ign);
+      vec3 p = o3 + d * tt;
+      vec3 em; float du;
+      galDisk(p.xy, p.z, st, bar, spc, sd, em, du);
+      float az = abs(p.z);
+      // диск слегка изогнут на краю (варп), у Центавра A — заметно
+      em *= exp(-az / z0) / (2.0 * z0);
+      float rho = du * exp(-az / zd) / (2.0 * zd) * 1.6;
+      float g = exp(-pow((tt - tc) / w, 2.0));
+      sumTG += Tr * g * ds; sumG += g * ds;
+      col += Tr * em * ds;
+      Tr *= exp(-rho * ds);
+    }
+  }
+  // свет сфероида проходит сквозь пыль диска: средняя прозрачность по его ширине вдоль луча
+  if (hasDisk && tb > ta){
+    float gB = 0.886 * w * (1.0 + erfA((ta - tc) / w)), gA = 0.886 * w * (1.0 - erfA((tb - tc) / w));
+    sph *= (gB + sumTG + gA * Tr) / max(gB + sumG + gA, 1e-6);
+  }
+  col += sph;
+  // гало: мягкое сферическое свечение и рой шаровых скоплений
+  float bh = length(o3 + d * max(-dot(o3, d), 0.0));
+  col += (st < 0.5 ? vec3(1.0, 0.86, 0.7) : vec3(0.9, 0.86, 0.8)) * (st < 0.5 ? 0.05 : 0.018) * exp(-bh / 0.32) * smoothstep(1.3, 0.8, bh);
+  // M82: «сверхветер» — красные волокна Hα вдоль малой оси
+  if (spc > 2.5){
+    for (int i = 0; i < 8 + u_zero; i++){
+      float tt = t0 + (t1 - t0) * (float(i) + ign) / 8.0;
+      vec3 p = o3 + d * tt;
+      float az = abs(p.z), rr = length(p.xy);
+      float cone = smoothstep(0.12 + 0.45 * az, 0.0, rr) * smoothstep(0.04, 0.12, az) * smoothstep(0.8, 0.3, az);
+      float f = pow(max(snoise(vec3(p.xy * 9.0 / (0.2 + az), az * 3.0 + sd)), 0.0), 2.0);
+      col += vec3(1.0, 0.22, 0.32) * cone * f * 1.6 * (t1 - t0) / 8.0;
+    }
+  }
+  return col;
+}
 float h1(float x){ return fract(sin(x * 91.17 + v_par.z * 413.3) * 43758.5453); }
 vec2 h2(vec2 p){ return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3))) + v_par.z * 17.0) * 43758.5453); }
 // звёздное поле в плоскости квада: одна звезда на ячейку с вероятностью dens(q)
@@ -135,7 +289,10 @@ void main(){
   vec3 col = vec3(0.0);
   float detail = smoothstep(2.5, 9.0, v_pr);
   if (detail > 0.0 && (tc > 0.0 || length(C) < R)){
-    if (cls <= 2 || cls == 14){
+    if (cls <= 2){
+      float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+      col = galaxy3D(rd, C, R, N, v_morph, seed, v_pr, ign) * 2.2;
+    } else if (cls == 14){
       // ---------- галактика: диск в своей плоскости + балдж/эллипсоид ----------
       float den = dot(rd, N);
       vec3 p = cp;
@@ -268,7 +425,7 @@ void main(){
     // галактики не растягиваются на весь экран — там работает шейдер чёрной дыры
     if (cls <= 2 || cls == 11 || cls == 14) col *= smoothstep(2e-5, 6e-4, length(C) / R);
     // ориентирные галактики: мягкий предел яркости и плавный край (спрайт не пересвечивается в белое пятно)
-    if (v_boost > 0.0 && cls <= 2){ col *= smoothstep(1.05, 0.8, b); col /= 1.0 + max(max(col.r, col.g), col.b) * 0.5 * v_boost; }
+    if (v_boost > 0.0 && cls <= 2) col /= 1.0 + max(max(col.r, col.g), col.b) * 0.25 * v_boost;
     col *= u_bright * detail;
   }
   // издали — точка: блеск по видимой величине (сохраняет поток при переходе)

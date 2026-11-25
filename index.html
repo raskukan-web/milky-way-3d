@@ -87,6 +87,7 @@
   <div id="cardPlanets"></div>
   <button id="cardFly" class="primary">🚀 Лететь (Enter)</button>
   <button id="cardLand" class="primary hidden">🛬 Приземлиться</button>
+  <button id="cardDive" class="primary hidden">🪂 Погрузиться в атмосферу</button>
 </section>
 
 <section id="hud" class="glass">
@@ -99,6 +100,7 @@
 <section id="surfHud" class="glass hidden">
   <div id="surfInfo">—</div>
   <div id="surfHint">WASD / стрелки — идти · мышь / палец — осмотр · R/F — выше/ниже · Shift — быстрее</div>
+  <div id="surfAlt" class="hidden"><button id="surfAltUp" title="Выше (R)">▲ выше</button><button id="surfAltDn" title="Ниже (F)">▼ ниже</button></div>
   <button id="surfUp" class="primary">🚀 Взлететь на орбиту</button>
 </section>
 
@@ -130,6 +132,7 @@
 <script src="js/shaders/probe.js"></script>
 <script src="js/shaders/deepsky.js"></script>
 <script src="js/shaders/surface.js"></script>
+<script src="js/shaders/aero.js"></script>
 <script src="js/world/solar.js"></script>
 <script src="js/world/probes.js"></script>
 <script src="js/world/cosmos.js"></script>
