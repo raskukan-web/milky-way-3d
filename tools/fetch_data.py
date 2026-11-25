@@ -257,6 +257,87 @@ def fetch_pulsars():
     print('  пульсаров:', len(out))
     return len(out)
 
+# ---- ревизия расстояний: у близких объектов OpenNGC нет надёжного z, а оценка «по блеску» (абс. величина −20,5)
+#      для карликов ошибается в 5–70 раз (Магеллановы Облака выходили в 3–6 раз дальше и в 3–6 раз крупнее
+#      Млечного Пути). Ниже — измеренные расстояния (цефеиды / TRGB / SBF; NED, Extragalactic Distance Database).
+# галактики Местной группы и Местного объёма, млн св. лет
+GAL_DIST = {
+    'ESO056-115': 0.163, 'NGC0292': 0.200, 'ESO356-004': 0.46, 'ESO351-030': 0.29, 'NGC6822': 1.63, 'IC1613': 2.38,
+    'NGC0185': 2.08, 'NGC0147': 2.45, 'IC0010': 2.2, 'NGC3109': 4.3, 'IC5152': 5.8, 'NGC0055': 6.5, 'NGC0300': 6.1,
+    'IC4662': 8.0, 'NGC4163': 9.4, 'NGC4214': 9.6, 'NGC1560': 9.6, 'NGC0404': 10.0, 'NGC2403': 10.4, 'NGC2366': 10.4,
+    'NGC1569': 10.6, 'IC0342': 10.7, 'NGC5102': 11.0, 'NGC0247': 11.1, 'NGC0253': 11.4, 'NGC5253': 11.5, 'NGC2976': 11.6,
+    'NGC5128': 12.4, 'NGC4945': 12.4, 'NGC2915': 12.4, 'NGC0625': 12.7, 'NGC7793': 12.7, 'NGC3077': 12.8, 'IC2574': 13.0,
+    'NGC4449': 13.7, 'NGC1313': 14.0, 'NGC4068': 14.0, 'NGC4395': 14.3, 'NGC4244': 14.3, 'NGC4236': 14.5, 'NGC5204': 15.7,
+    'NGC5408': 15.7, 'NGC3738': 16.0, 'NGC0784': 16.6, 'NGC1705': 16.8, 'NGC6503': 17.0, 'NGC5068': 17.0, 'NGC4605': 18.0,
+    'NGC5585': 20.0, 'NGC3621': 21.7, 'NGC0045': 22.0, 'NGC4144': 22.5, 'NGC5195': 23.0, 'NGC4631': 24.0,
+    'NGC4656 NED01': 24.0, 'NGC0024': 24.0, 'NGC6946': 25.2, 'NGC4490': 26.0, 'NGC2903': 30.0, 'NGC2683': 30.0,
+    'NGC6744': 31.0, 'NGC3115': 31.6, 'NGC3628': 35.0,
+}
+# шаровые скопления Галактики без справочного расстояния — каталог Harris (2010 edition), кпк
+GC_KPC = {
+    'NGC0104': 4.5, 'NGC0288': 8.9, 'NGC0362': 8.6, 'NGC1261': 16.3, 'NGC1851': 12.1, 'NGC2298': 10.8, 'NGC2419': 82.6,
+    'NGC2808': 9.6, 'NGC3201': 4.9, 'NGC4147': 19.3, 'NGC4372': 5.8, 'NGC4833': 6.6, 'NGC5053': 17.4, 'NGC5139': 5.2,
+    'NGC5286': 11.7, 'NGC5466': 16.0, 'NGC5634': 25.2, 'NGC5694': 35.0, 'NGC5824': 32.1, 'NGC5897': 12.5, 'NGC5927': 7.7,
+    'NGC5946': 10.6, 'NGC5986': 10.4, 'NGC6101': 15.4, 'NGC6139': 10.1, 'NGC6144': 8.9, 'NGC6229': 30.5, 'NGC6235': 11.5,
+    'NGC6256': 10.3, 'NGC6284': 15.3, 'NGC6287': 9.4, 'NGC6293': 9.5, 'NGC6304': 5.9, 'NGC6316': 10.4, 'NGC6325': 7.8,
+    'NGC6342': 8.5, 'NGC6352': 5.6, 'NGC6355': 9.2, 'NGC6356': 15.1, 'NGC6362': 7.6, 'NGC6366': 3.5, 'NGC6380': 10.9,
+    'NGC6388': 9.9, 'NGC6397': 2.3, 'NGC6401': 10.6, 'NGC6426': 20.6, 'NGC6440': 8.5, 'NGC6441': 11.6, 'NGC6453': 11.6,
+    'NGC6496': 9.6, 'NGC6517': 10.6, 'NGC6522': 7.7, 'NGC6528': 7.9, 'NGC6535': 6.8, 'NGC6539': 7.8, 'NGC6540': 5.3,
+    'NGC6541': 7.5, 'NGC6544': 3.0, 'NGC6553': 6.0, 'NGC6558': 7.4, 'NGC6569': 10.9, 'NGC6584': 13.5, 'NGC6624': 7.9,
+    'NGC6638': 9.4, 'NGC6642': 8.1, 'NGC6652': 10.0, 'NGC6712': 6.9, 'NGC6717': 7.1, 'NGC6723': 8.7, 'NGC6749': 7.9,
+    'NGC6752': 4.0, 'NGC6760': 7.4, 'NGC6934': 15.6, 'NGC7006': 41.2, 'NGC7492': 26.3, 'IC1257': 25.0, 'IC1276': 5.4,
+    'IC4499': 18.8,
+}
+# спутники с собственными скоплениями и туманностями: (RA ч, Dec °, радиус поиска °, расстояние, св. лет, название)
+SAT_HOSTS = [(5.392, -69.756, 11.0, 163000, 'Большого Магелланова Облака'), (0.879, -72.83, 4.5, 200000, 'Малого Магелланова Облака'),
+             (2.6664, -34.449, 1.2, 460000, 'карликовой галактики в Печи')]
+
+
+def sky_sep(ra1, d1, ra2, d2):
+    r = math.radians
+    c = math.sin(r(d1)) * math.sin(r(d2)) + math.cos(r(d1)) * math.cos(r(d2)) * math.cos(r((ra1 - ra2) * 15))
+    return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+
+def refine_ngc(objs):
+    """Ревизия расстояний и размеров (радиус пересчитывается по угловому размеру): галактики Местного объёма,
+    шаровые скопления Харриса, члены Магеллановых Облаков и Печи вместо типовых 4 000 / 35 000 св. лет."""
+    n = 0
+    for o in objs:
+        name, dist = o['n'], None
+        if name in GAL_DIST:
+            dist, o['dm'] = GAL_DIST[name] * 1e6, 'ref'
+        elif name in GC_KPC:
+            dist, o['dm'] = GC_KPC[name] * 3261.56, 'harris'
+        elif o.get('est') and o['vis'] != 'galaxy':
+            for ra, dec, rad, d, host in SAT_HOSTS:
+                if sky_sep(o['ra'], o['dec'], ra, dec) < rad:
+                    dist, o['dm'], o['host'] = d, 'host', host
+                    break
+        if dist is None:
+            continue
+        o['dist'] = round(dist, 1)
+        o['r'] = round(max(dist * math.tan(math.radians(max(o.get('maj') or 1.0, 1.0) / 60 / 2)), 0.3), 2)
+        o['est'] = False
+        n += 1
+    return n
+
+
+def refine_ngc_file():
+    """Применяет ревизию к уже скачанному js/data/dso_ext.js (без загрузки OpenNGC заново)."""
+    path = os.path.join(DATA, 'dso_ext.js')
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+    a, b = text.index('MW.dsoExt = ') + len('MW.dsoExt = '), text.rindex(';')
+    objs = json.loads(text[a:b])
+    n = refine_ngc(objs)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text[:a])
+        json.dump(objs, f, ensure_ascii=False, separators=(',', ':'))
+        f.write(text[b:])
+    print(f'  -> js/data/dso_ext.js: уточнено {n} расстояний')
+
+
 def fetch_ngc():
     files = {}
     for name in ('NGC.csv', 'addendum.csv'):
@@ -346,6 +427,7 @@ def fetch_ngc():
                     continue
                 seenM[mnum] = o
             objs.append(o)
+    refine_ngc(objs)
     objs.sort(key=lambda o: (o['m'] is None, o['m'] or 0, o['mag'] if o['mag'] is not None else 99))
     with open(os.path.join(DATA, 'dso_ext.js'), 'w', encoding='utf-8') as f:
         f.write("'use strict';\n/* OpenNGC (CC BY-SA 4.0, mattiaverga/OpenNGC): полный каталог NGC/IC + Мессье (без звёзд и дубликатов).\n"
@@ -665,6 +747,8 @@ if __name__ == '__main__':
     if not only or 'ngc' in only:
         print('[3/4] Каталог Мессье / NGC / IC')
         fetch_ngc()
+    if 'ngcfix' in only:  # только ревизия расстояний в готовом dso_ext.js
+        refine_ngc_file()
     if not only or 'psr' in only:
         print('[+] ATNF Pulsar Catalogue')
         fetch_pulsars()

@@ -242,9 +242,9 @@ MW.MOBILE = /Mobi|Android|iPad|iPhone/i.test(navigator.userAgent || '') || (navi
    дыры), post — тяжёлые полноэкранные проходы (bloom, лучи и блики объектива). */
 MW.PRESETS = {
   // terrain: сетка ландшафта у поверхности (лучи × кольца), шаги теней, делитель разрешения неба, микрорельеф
-  ultra: { name: 'Ультра (RTX)', q: 1, web: 900000, dpr: 1.5, march: 1, post: true, terrain: { az: 320, rings: 150, shadow: 10, skyDiv: 2, skySteps: 16, micro: 1, microOct: 16 } },
-  medium: { name: 'Среднее (ноутбуки / планшеты)', q: 0.32, web: 250000, dpr: 1.25, march: 0.45, post: true, terrain: { az: 176, rings: 92, shadow: 5, skyDiv: 2, skySteps: 10, micro: 0.8, microOct: 11 } },
-  low: { name: 'Слабое железо', q: 0.11, web: 80000, dpr: 1.0, march: 0.33, post: false, terrain: { az: 112, rings: 60, shadow: 0, skyDiv: 3, skySteps: 7, micro: 0.6, microOct: 7 } },
+  ultra: { name: 'Ультра (RTX)', q: 1, web: 900000, dpr: 1.5, march: 1, post: true, terrain: { az: 256, rings: 240, shadow: 10, skyDiv: 2, skySteps: 16, micro: 1, microOct: 16 } },
+  medium: { name: 'Среднее (ноутбуки / планшеты)', q: 0.32, web: 250000, dpr: 1.25, march: 0.45, post: true, terrain: { az: 160, rings: 140, shadow: 5, skyDiv: 2, skySteps: 10, micro: 0.8, microOct: 11 } },
+  low: { name: 'Слабое железо', q: 0.11, web: 80000, dpr: 1.0, march: 0.33, post: false, terrain: { az: 112, rings: 90, shadow: 0, skyDiv: 3, skySteps: 7, micro: 0.6, microOct: 7 } },
 };
 // Строка GPU (WEBGL_debug_renderer_info) — по ней автоопределение мощности
 MW.gpuString = (() => {

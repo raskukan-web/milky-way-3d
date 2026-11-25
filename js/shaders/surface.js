@@ -2,8 +2,9 @@
 /* =====================================================================
  *  Режим «На поверхности»: шейдеры ландшафта, неба и событий.
  *
- *  Ландшафт — радиальная сетка вокруг камеры (кольца растут геометрически от ~0,3 м до горизонта),
- *  вершины смещаются по высоте. Всё считается в системе координат тела в метрах ОТНОСИТЕЛЬНО камеры —
+ *  Ландшафт — радиальная сетка вокруг камеры (у ног шаг 0,25 м, дальше кольца плавно растут к горизонту);
+ *  высоту вершина берёт билинейно из узлов решётки, неподвижной относительно планеты (карта грани куба),
+ *  с геоморфингом между уровнями 2^l и 2^(l+1) — рельеф не «плывёт» и не идёт волнами при ходьбе. Всё считается в системе координат тела в метрах ОТНОСИТЕЛЬНО камеры —
  *  точность float32 не теряется даже у планеты радиусом 6 000 км.
  *  Высота = крупный рельеф по направлению n (материки, хребты, холмы, кратеры; шум симплекс)
  *         + мелкий рельеф в локальных метровых координатах (периодический шум с хэшем по решётке:
@@ -193,11 +194,11 @@ float localH(vec3 loc, float dx){
     }
   }
   // дюны: поперечные гряды вдоль ветра, гребни слегка извилистые
-  if (u_terr.y > 0.0 && dx < 20.0){
+  if (u_terr.y > 0.0 && dx < 10.0){
     float ph = dot(loc, u_windB) / 46.0 + 0.6 * pn(loc, 256.0).x + 0.25 * pn(loc, 64.0).x;
     float dune = pow(1.0 - abs(sin(ph * 3.14159)), 1.6);
     float field = smoothstep(-0.2, 0.4, pn(loc + 3000.0, 1024.0).x);
-    h += dune * 4.0 * u_terr.y * field * (1.0 - smoothstep(10.0, 20.0, dx));
+    h += dune * 4.0 * u_terr.y * field * (1.0 - smoothstep(5.0, 10.0, dx));   // ≥ 9 узлов на волну дюны
   }
   // ледяные миры: двойные хребты (Европа) — два параллельных вала с ложбиной посередине, сотни метров в поперечнике
   if ((u_style == 3 || u_style == 9) && u_terr2.z > 0.0){
@@ -206,11 +207,12 @@ float localH(vec3 loc, float dx){
     h += (smoothstep(0.93, 0.985, rr) - 0.7 * smoothstep(0.985, 0.998, rr)) * 120.0 * u_terr2.z * wk;
   }
   // валуны (поперечник ~1–2 м)
-  if (u_terr.z > 0.0 && dx < 0.45){
+  // (решётка у ног — 0,5 м, фильтр октав 0,75 м: валуны берутся в рельеф и у сетки, и у запроса высоты)
+  if (u_terr.z > 0.0 && dx < 1.2){
     // валун: гладкий неправильный купол (без резкого края — иначе он читается как кратер)
     vec3 c = cellNear(loc / 4.0, PM / 4.0, 0.35 * u_terr.z);
     float bd = c.x * (1.0 + 0.25 * pn(loc, 1.0).x);
-    if (bd < 1.0) h += pow(1.0 - bd * bd, 1.6) * c.z * 4.0 * 0.6 * (1.0 - smoothstep(0.2, 0.45, dx));
+    if (bd < 1.0) h += pow(1.0 - bd * bd, 1.6) * c.z * 4.0 * 0.6 * (1.0 - smoothstep(0.6, 1.2, dx));
   }
   return h;
 }
@@ -226,10 +228,11 @@ float Hfull(vec3 n, vec3 loc, float dx){
   // ---------- вершинный шейдер ландшафта ----------
   G.terrainVS = G.header + G.noise + G.surfCommon + `
 layout(location=0) in vec2 a_grid;      // x — номер кольца, y — номер луча
-uniform float u_NR, u_NA, u_s1, u_smax;
+uniform float u_NR, u_NA, u_s1, u_c;    // кольца: s(j) = s1·(e^(c·j) − 1)/c — у ног шаг s1, дальше плавный рост
 uniform vec3 u_n0, u_E, u_Nn;           // базис в точке под камерой (система тела)
 uniform float u_camAlt;                 // высота камеры над уровнем R, м
-uniform vec3 u_pmod;                    // точка под камерой в локальных координатах шума (м, по модулю 4096)
+uniform vec3 u_pmod;                    // точка под камерой в локальных координатах шума (м, по модулю PM)
+uniform vec4 u_faceC[6];                // камера в карте каждой грани куба, м: xy — по модулю 4096, zw — по модулю 2^24
 uniform mat3 u_b2v;                     // система тела → система камеры (вид)
 uniform mat4 u_proj;
 uniform int u_shSteps;
@@ -239,57 +242,113 @@ out vec3 v_n;       // направление от центра тела
 out vec3 v_N;       // нормаль (крупный + средний рельеф)
 out vec3 v_loc;
 out float v_h, v_sh, v_dx, v_s;
+/* Грани куба (0..5 = +x, −x, +y, −y, +z, −z): перестановка осей, после которой грань — «+z».
+   Карта грани — гномоническая проекция: точка (u, v) = R·(x/z, y/z). Решётка рельефа задана в этой карте,
+   т. е. неподвижна относительно планеты (одна и та же для любого положения камеры). */
+vec3 toF(vec3 v, int f){
+  if (f == 0) return vec3(v.y, v.z, v.x);
+  if (f == 1) return vec3(-v.y, v.z, -v.x);
+  if (f == 2) return vec3(v.z, v.x, v.y);
+  if (f == 3) return vec3(-v.z, v.x, -v.y);
+  if (f == 4) return v;
+  return vec3(-v.x, v.y, -v.z);
+}
+vec3 fromF(vec3 w, int f){
+  if (f == 0) return vec3(w.z, w.x, w.y);
+  if (f == 1) return vec3(-w.z, -w.x, w.y);
+  if (f == 2) return vec3(w.y, w.z, w.x);
+  if (f == 3) return vec3(w.y, -w.z, -w.x);
+  if (f == 4) return w;
+  return vec3(-w.x, w.y, -w.z);
+}
 void main(){
   float j = a_grid.x;
-  float s = j < 0.5 ? 0.0 : u_s1 * pow(u_smax / u_s1, (j - 1.0) / (u_NR - 1.0));
+  // Сетка у ног сверхплотная (шаг s1 ≈ 0,25 м → решётка 0,5 м) и плавно, без скачков, расширяется к горизонту
+  float s = u_s1 * (exp(u_c * j) - 1.0) / u_c;
   float th = a_grid.y / u_NA * 6.2831853;
   vec3 dir = cos(th) * u_E + sin(th) * u_Nn;
   float ang = s / u_R;
   float s2 = sin(ang * 0.5);
-  vec3 dn = -2.0 * s2 * s2 * u_n0 + sin(ang) * dir;
+  vec3 dn = -2.0 * s2 * s2 * u_n0 + sin(ang) * dir;     // n − n0 без потери точности у ног
   vec3 n = normalize(u_n0 + dn);
-  // шаг сетки (м): по радиусу и по окружности
-  float g = pow(u_smax / u_s1, 1.0 / (u_NR - 1.0));
-  float dx = max(max(s * (g - 1.0), s * 6.2831853 / u_NA), u_s1 * 0.7);
-  // Привязка вершин к НЕПОДВИЖНОЙ решётке планеты (world-space snapping): каждая вершина переносится в ближайший
-  // узел кубической решётки в координатах тела с шагом-степенью двойки ≈ окружному шагу сетки (уровни вложены).
-  // Рельеф берётся в фиксированных точках планеты — горы не «текут, как желе», когда наблюдатель идёт.
-  // Проекция на сферу — в первом порядке по малым величинам (без потери точности float у ног).
-  {
-    float q = exp2(floor(log2(max(max(s * 6.2831853 / u_NA, u_s1 * 0.7), 0.01))));
-    vec3 loc0 = u_pmod + u_R * dn;
-    vec3 dl = (floor(loc0 / q + 0.5) * q - loc0) / u_R;
-    vec3 Q = n + dl;
-    float e2 = 2.0 * dot(n, dl) + dot(dl, dl);           // |Q|² − 1
-    float e = e2 / (sqrt(1.0 + e2) + 1.0);               // |Q| − 1
-    dn = dn + dl - Q * (e / (1.0 + e));
-    n = normalize(u_n0 + dn);
-    dir = normalize(dn - u_n0 * dot(dn, u_n0) + 1e-12 * u_E);
-  }
   vec3 loc = u_pmod + u_R * dn;
-  // Все вызовы функции высоты — в ОДНОМ цикле (центр, две точки для нормали, шаги тени к звезде):
-  // так тяжёлая функция встраивается компилятором один раз (D3D/ANGLE иначе компилирует минутами).
+  // шаг сетки (м): по радиусу и по окружности
+  float dxm = max(u_s1 + u_c * s, s * 6.2831853 / u_NA);
+  /* ---- высота: решётка, неподвижная относительно планеты, + геоморфинг уровней ----
+     Раньше вершина «прыгала» в ближайший узел решётки — при ходьбе узлы перескакивали, и рельеф шёл волнами.
+     Теперь вершина скользит вместе с камерой, а высоту берёт билинейно из 4 узлов решётки уровня l
+     (шаг 2^l м в карте грани): эта поверхность — функция только точки планеты (нормали normalize(n0 + dn)),
+     поэтому земля стоит монолитно. Уровень детализации непрерывен по расстоянию: на переходе l → l+1
+     высота плавно смешивается с решёткой вдвое крупнее (vertex morphing) — без «щелчков» между уровнями. */
+  vec3 an = abs(n);
+  int f = an.x >= an.y && an.x >= an.z ? (n.x > 0.0 ? 0 : 1) : an.y >= an.z ? (n.y > 0.0 ? 2 : 3) : (n.z > 0.0 ? 4 : 5);
+  vec3 cF = toF(u_n0, f), dF = toF(dn, f), vF = cF + dF;
+  vec4 FC = u_faceC[f];
+  bool rel = cF.z > 0.15;                   // камера видит грань под небольшим углом — считаем относительно неё
+  float cosT = vF.z / length(vF);
+  float J = cosT * sqrt(cosT);              // масштаб карты: метров поверхности на метр карты (гномоника)
+  float Lf = clamp(log2(2.0 * dxm / J), -2.0, 23.0);
+  float l0 = floor(Lf);
+  float mW = smoothstep(0.55, 1.0, Lf - l0);
+  vec2 dU = rel ? u_R * (dF.xy * cF.z - cF.xy * dF.z) / (vF.z * cF.z) : u_R * vF.xy / vF.z;
+  vec3 Pc = cF / max(cF.z, 1e-3);
+  float L0 = 1.0 / max(cF.z, 1e-3);
+  // нормаль и тени — по гладкой полосе рельефа (вдвое крупнее решётки): её скольжение вместе с сеткой незаметно
+  float sig = exp2(l0 + mW) * J;
+  float ddN = 2.0 * sig;
   vec3 t1 = normalize(dir - n * dot(dir, n));
   if (j < 0.5) t1 = u_E;
   vec3 t2 = cross(n, t1);
-  float eM = max(dx, 40.0), eL = max(dx, 0.05);   // крупный рельеф — шаг ≥ 40 м (точность float)
+  float eM = max(ddN, 40.0), eL = max(ddN, 0.05);   // крупный рельеф — шаг ≥ 40 м (точность float)
   float mu = dot(n, u_sunB);
   int nSh = (u_shSteps > 0 && mu > -0.15) ? u_shSteps : 0;
-  float t = max(dx * 2.0, 3.0);
+  float t = max(sig * 2.0, 3.0);
   float tmax = clamp(u_relief * 25.0, 2000.0, 80000.0);
   float kk = pow(tmax / t, 1.0 / float(max(nSh - 1, 1)));
   vec2 c0 = vec2(0.0), d1 = vec2(0.0), d2 = vec2(0.0);
   float h = 0.0, sh = 1.0;
-  for (int i = 0; i < 40 + u_zero; i++){
-    if (i >= 3 + nSh) break;
-    vec3 nn = n, ll = loc; float dd = dx;
-    if (i == 1){ nn = normalize(n + t1 * (eM / u_R)); ll = loc + t1 * eL; }
-    else if (i == 2){ nn = normalize(n + t2 * (eM / u_R)); ll = loc + t2 * eL; }
-    else if (i >= 3){ nn = normalize(n + u_sunB * (t / u_R)); ll = loc + u_sunB * t; dd = max(dx, t * 0.12); }
+  // Все вызовы функции высоты — в ОДНОМ цикле (8 узлов решётки двух уровней, три точки для нормали, шаги тени
+  // к звезде): так тяжёлая функция встраивается компилятором один раз (D3D/ANGLE иначе компилирует минутами).
+  for (int i = 0; i < 52 + u_zero; i++){
+    if (i >= 11 + nSh) break;
+    vec3 nn = n, ll = loc; float dd = ddN, w = 0.0;
+    if (i < 8){
+      int lv = i / 4, cr = i - lv * 4;
+      w = lv == 0 ? 1.0 - mW : mW;
+      if (w <= 0.0) continue;
+      float q = exp2(l0 + float(lv));
+      vec2 cm = q <= 4096.0 ? FC.xy : FC.zw;
+      vec2 uv = rel ? (cm + dU) / q : dU / q;
+      vec2 i0 = floor(uv), fx = uv - i0;
+      vec2 ab = vec2(float(cr & 1), float(cr >> 1));
+      vec2 wb = mix(1.0 - fx, fx, ab);
+      w *= wb.x * wb.y;
+      if (w <= 0.0) continue;
+      vec3 dnC;
+      if (rel){
+        vec3 dl = vec3(((i0 + ab) * q - cm) / u_R, 0.0);
+        vec3 P1 = Pc + dl;
+        float L1 = length(P1);
+        float dL = (2.0 * dot(Pc, dl) + dot(dl, dl)) / (L0 + L1);
+        dnC = fromF(dl / L1 - Pc * (dL / (L0 * L1)), f);
+      } else {
+        dnC = fromF(normalize(vec3((i0 + ab) * q / u_R, 1.0)), f) - u_n0;
+      }
+      nn = normalize(u_n0 + dnC); ll = u_pmod + u_R * dnC;
+      dd = 1.5 * q * J;                       // фильтр октав — по уровню решётки: узел одинаков для всех вершин
+    }
+    else if (i == 9){ nn = normalize(n + t1 * (eM / u_R)); ll = loc + t1 * eL; }
+    else if (i == 10){ nn = normalize(n + t2 * (eM / u_R)); ll = loc + t2 * eL; }
+    else if (i >= 11){ nn = normalize(n + u_sunB * (t / u_R)); ll = loc + u_sunB * t; dd = max(max(ddN, t * 0.12), 1.25); }   // валуны тень по вершинам не отбрасывают (иначе «пунктир» вдоль колец)
     vec2 r = vec2(macroH(nn, dd), localH(ll, dd));
-    if (i == 0){ c0 = r; h = r.x + r.y; if (u_terr2.x > 0.5) h = max(h, seaLevel()); }
-    else if (i == 1) d1 = r - c0;
-    else if (i == 2) d2 = r - c0;
+    if (i < 8){
+      float hq = r.x + r.y;
+      if (u_terr2.x > 0.5) hq = max(hq, seaLevel());
+      h += w * hq;
+    }
+    else if (i == 8) c0 = r;
+    else if (i == 9) d1 = r - c0;
+    else if (i == 10) d2 = r - c0;
     else {
       float hq = r.x + r.y;
       if (u_terr2.x > 0.5) hq = max(hq, seaLevel());
@@ -299,12 +358,13 @@ void main(){
     }
   }
   vec3 N = normalize(n - t1 * (d1.x / eM + d1.y / eL) - t2 * (d2.x / eM + d2.y / eL));
-  if (u_terr2.x > 0.5 && c0.x + c0.y < seaLevel()) N = n;
+  if (u_terr2.x > 0.5 && h <= seaLevel() + 0.01) N = n;
   sh *= smoothstep(-0.12, 0.02, dot(N, u_sunB) + 0.05);
   vec3 p = (u_R + h) * dn + (h - u_camAlt) * u_n0;
-  v_p = p; v_n = n; v_N = N; v_loc = loc; v_h = h; v_sh = sh; v_dx = dx; v_s = s;
+  v_p = p; v_n = n; v_N = N; v_loc = loc; v_h = h; v_sh = sh; v_dx = 0.75 * ddN; v_s = s;
   gl_Position = u_proj * vec4(u_b2v * p, 1.0);
 }`;
+
 
   // ---------- фрагментный шейдер ландшафта ----------
   G.terrainFS = G.header + G.noise + G.surfCommon + `
@@ -524,7 +584,8 @@ void main(){
   float d = i == 0 ? 0.0 : 30.0 * pow(4.0, float(i - 1));
   float a = d / u_R, s2 = sin(a * 0.5);
   vec3 dn = -2.0 * s2 * s2 * u_n0 + sin(a) * u_sunTan;
-  float h = Hfull(normalize(u_n0 + dn), u_pmod + u_R * dn, i == 0 ? 0.3 : max(0.3, d * 0.05));
+  // под камерой — тот же фильтр октав, что у узлов решётки у ног (0,75 м): наблюдатель идёт ровно по видимой земле
+  float h = Hfull(normalize(u_n0 + dn), u_pmod + u_R * dn, i == 0 ? 0.75 : max(0.75, d * 0.05));
   o = vec4(h, 0.0, 0.0, 1.0);
 }`;
 
@@ -544,6 +605,7 @@ uniform vec3 u_cloudC;
 uniform vec3 u_windL;        // ветер (система тела), м/с
 uniform float u_wt;          // модельное время, с
 uniform vec4 u_aur;          // x яркость полярного сияния, y смещение по времени
+uniform vec4 u_glow;         // свечение ночного неба (airglow): rgb — яркость слоя в зените, w — высота слоя, м (0 — нет)
 uniform vec3 u_diff;         // диффузный свет многократного рассеяния очень плотной атмосферы (Венера)
 uniform vec4 u_pl[6];        // столбы (гейзеры, пылевые вихри): xy — положение (лок., м), z высота, w ширина
 uniform vec4 u_plC[6];       // цвет, w — активность (0 — нет)
@@ -653,6 +715,14 @@ void main(){
       acc += c * band * ray * exp(-pow((zz - 130000.0) / 90000.0, 2.0));
     }
     In += acc * u_aur.x * 0.06;
+  }
+  // ---- свечение ночного неба (airglow): тонкий излучающий слой верхней атмосферы. Луч у горизонта идёт вдоль
+  //      слоя дольше (эффект ван Рейна) — над горизонтом мягкая светлая полоса, зенит темнее; поглощение нижней
+  //      атмосферы ослабляет её у самого горизонта, но не гасит (рассеянный свет) ----
+  if (u_glow.w > 0.0 && !ground){
+    float rr = u_Rg / (u_Rg + u_glow.w);
+    float vr = min(inversesqrt(max(1.0 - rr * rr * (1.0 - rd.z * rd.z), 1e-4)), 7.0);
+    In += u_glow.rgb * vr * (0.3 + 0.7 * T);
   }
   // ---- столбы: гейзеры криовулканов и пылевые вихри ----
   for (int i = 0; i < 6 + u_zero; i++){

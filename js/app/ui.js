@@ -883,7 +883,9 @@
         if (occl.length && hidden(pos)) return null;
         // на поверхности: объекты под местным горизонтом не подписываем
         if (this._surfUp && v3.dot(v3.sub(pos, cam.pos), this._surfUp) < -0.01 * v3.dist(pos, cam.pos)) return null;
-        if (this._surfDay && !opts.force && v3.dist(pos, cam.pos) > 0.01) return null;
+        // на поверхности (днём и ночью) небо подписывается только светилами своей системы: звезда, луны, соседние
+        // планеты; сверхскопления, квазары, далёкие галактики и звёзды — без 3D-подписей (их видно на небе и так)
+        if (this._surfUp && !opts.force && v3.dist(pos, cam.pos) > 0.01) return null;
         ctx.font = (opts.bold ? '600 ' : '') + (opts.size || 12) + 'px "Segoe UI", system-ui, sans-serif';
         const tw = ctx.measureText(text).width;
         const ox = opts.center ? -tw / 2 : 8, oy = opts.center ? 4 : -6;
@@ -919,6 +921,7 @@
       // плавно гаснут. Издали остаются рукава, Солнце, центр Галактики, галактики и внегалактические ориентиры.
       const GAL_IN = new Set(['nebula', 'snr', 'planetary', 'cluster', 'globular', 'pulsar', 'xray']);
       const galFade = (d) => 1 - U.smoothstep(12000, 20000, d);
+      const dGC = v3.dist(cam.pos, MW.C.GC_POS);
       // тела систем
       for (const sys of sc.systems) {
         const dSys = v3.dist(cam.pos, sys.star.pos);
@@ -976,7 +979,10 @@
         if (o.ext && o.messier && o.vis === 'galaxy' && dO > 1e8) continue;
         if (landmark && dO > Math.max(o.dist * 40, 6e10)) continue;
         // объекты внутри диска (в т.ч. ориентиры вроде Кассиопеи A, Лебедя X-1) — только вблизи
-        const gf = GAL_IN.has(o.vis) ? galFade(dO) : 1;
+        let gf = GAL_IN.has(o.vis) ? galFade(dO) : 1;
+        // сверхскопления (Сарасвати, Феникса, Скульптора…) — только вне Местной группы: ближе 5 млн св. лет к центру
+        // Галактики их подписи легли бы поверх её рукавов; дальше проявляются плавно (5 → 6,5 млн св. лет)
+        if (o.supercluster) gf *= U.smoothstep(5e6, 6.5e6, dGC);
         if (gf <= 0.02) continue;
         label(o.name, o.pos, { nebula: '#ff9ab0', snr: '#ffb27a', planetary: '#7af0d0', globular: '#ffe4a8', cluster: '#a8c8ff', galaxy: '#d8c8ff', pulsar: '#8fd4ff', quasar: '#9fc0ff', galcluster: '#ffd9a0', xray: '#b6c8ff' }[o.vis] || '#ddd', { size: 11, bold: landmark, alpha: gf, obj: o });
       }

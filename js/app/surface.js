@@ -33,6 +33,8 @@
     return { x: v3.add(v3.scale(fr.x, c), v3.scale(fr.y, s)), y: v3.add(v3.scale(fr.x, -s), v3.scale(fr.y, c)), z: fr.z };
   }
   const toBody = (ax, w) => [v3.dot(ax.x, w), v3.dot(ax.y, w), v3.dot(ax.z, w)];
+  // перестановка осей: грань куба f (0..5 = +x, −x, +y, −y, +z, −z) → «+z» (как toF в шейдере ландшафта)
+  const toFace = (v, f) => [[v[1], v[2], v[0]], [-v[1], v[2], -v[0]], [v[2], v[0], v[1]], [-v[2], v[0], -v[1]], [v[0], v[1], v[2]], [-v[0], v[1], -v[2]]][f];
   const toWorld = (ax, b) => [ax.x[0] * b[0] + ax.y[0] * b[1] + ax.z[0] * b[2], ax.x[1] * b[0] + ax.y[1] * b[1] + ax.z[1] * b[2], ax.x[2] * b[0] + ax.y[2] * b[1] + ax.z[2] * b[2]];
 
   /* ---------- физический профиль тела ---------- */
@@ -170,6 +172,13 @@
     P.sunE = U.clamp(1.2 * Math.pow(flux, 0.06), 0.8, 1.35) * Math.PI;
     P.sunAng = Math.atan(((st.radius || (st.radiusSun || 1) * MW.C.RSUN_LY)) / Math.max(v3.dist(st.pos, b.pos), 1e-30));
     P.lin = lin;
+    // свечение ночного неба и звёздный фон: чем плотнее атмосфера (колонка рэлеевского рассеяния относительно
+    // земной), тем ярче слой airglow (O I 557,7 нм, OH, Na — зеленовато-бирюзовый) и рассеянный свет ночью
+    if (P.atm) {
+      const tau = (P.atm.bR[1] * P.atm.HR) / (EARTH_R[1] * 8000);
+      P.glow = { k: U.clamp(Math.sqrt(tau), 0.35, 2.2), alt: U.clamp(P.atm.HR * 11, 40000, 250000),
+        col: P.atm.HM > 4000 && P.atm.bMa[2] > P.atm.bMa[0] ? [0.95, 0.75, 0.45] : [0.5, 1.0, 0.62] };
+    }
     return P;
   }
 
@@ -918,6 +927,9 @@
         this.veil = 1; this.skyLum = 0;
       }
       const sunC = sunE.map((c, i) => c * this.sunT[i]);
+      // ночь: рельеф подсвечен свечением неба (airglow) и звёздным фоном — у плотной атмосферы заметно, а не чёрная пустота
+      const night = 1 - U.smoothstep(-0.21, -0.02, sunL[2]);
+      const ambN = p.glow && night > 0.001 ? [0, 1, 2].map((i) => (0.12 * p.glow.col[i] + 0.09 * [0.75, 0.85, 1.0][i]) * p.glow.k * night) : [0, 0, 0];
       // отражённый свет планеты-хозяина (Юпитер на ночной стороне Европы)
       let parL = [0, 0, 1], parC = [0, 0, 0];
       if (b.parentBody) {
@@ -955,6 +967,9 @@
         const lat = Math.abs(Math.asin(U.clamp(n0[2], -1, 1))) / DEG;
         const aur = p.aurora ? U.smoothstep(50, 64, lat) * U.smoothstep(-4, -12, Math.asin(U.clamp(sunL[2], -1, 1)) / DEG) : 0;
         s.set('u_aur', f32([aur * (this.auroraBoost || 1), sc.realTime, 0, 0]));
+        // свечение ночного неба: ночью (звезда ниже −1…−12°), у всех тел с атмосферой; яркость — с запасом над
+        // «носком» кривой ACES (иначе слабый слой тонет в чёрном)
+        s.set('u_glow', f32(night > 0.001 && p.glow ? [...p.glow.col.map((c) => c * 0.0045 * p.glow.k * night), p.glow.alt] : [0, 0, 0, 0]));
         s.set('u_diff', f32(p.diff ? p.diff.map((d, i) => d * sunE[i] * U.smoothstep(-0.25, 0.1, sunL[2])) : [0, 0, 0]));
         this.setPlumes(s, p, n0, E, N, windB, sunL);
         gl.bindVertexArray(glc.emptyVAO); gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -979,7 +994,7 @@
         s.set('u_camR', camR); s.set('u_Rg', Rg); s.set('u_Rt', Rg + 1);
         s.set('u_bR', f32([0, 0, 0])); s.set('u_bMs', f32([0, 0, 0])); s.set('u_bMa', f32([0, 0, 0])); s.set('u_bO', f32([0, 0, 0])); s.set('u_gM', f32([0.5, 0.5, 0.5]));
         s.set('u_H', f32([8000, 8000])); s.set('u_sunL', f32(sunL)); s.set('u_sunE', f32(sunE)); s.set('u_steps', 1);
-        s.set('u_cloud', f32([0, 0, 0, 1])); s.set('u_aur', f32([0, 0, 0, 0])); s.set('u_wt', wt); s.set('u_diff', f32([0, 0, 0]));
+        s.set('u_cloud', f32([0, 0, 0, 1])); s.set('u_aur', f32([0, 0, 0, 0])); s.set('u_glow', f32([0, 0, 0, 0])); s.set('u_wt', wt); s.set('u_diff', f32([0, 0, 0]));
         this.setPlumes(s, p, n0, E, N, windB, sunL);
         gl.bindVertexArray(glc.emptyVAO); gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -997,10 +1012,26 @@
       const t = this.progs.terrain.use();
       setTerr(t);
       t.set('u_NR', this.mesh.NR); t.set('u_NA', this.mesh.NA);
-      const s1 = Math.max(0.22, (camAlt - hG) * 0.12);
+      // кольца: s(j) = s1·(e^(c·j) − 1)/c — у ног шаг s1 (≈ 0,25 м, решётка высот 0,5 м), к горизонту шаг плавно
+      // растёт; c подбирается так, чтобы последнее кольцо легло на дальность горизонта smax
+      const s1 = Math.max(0.25, (camAlt - hG) * 0.12);
       const reach = Math.max(p.relief * 1.2, 50);
-      const smax = Math.min(Math.sqrt(2 * R * Math.max(camAlt + reach, 5)) + Math.sqrt(2 * R * reach), R * Math.PI * 0.6);
-      t.set('u_s1', s1); t.set('u_smax', Math.max(smax, s1 * 20));
+      const smax = Math.max(Math.min(Math.sqrt(2 * R * Math.max(camAlt + reach, 5)) + Math.sqrt(2 * R * reach), R * Math.PI * 0.6), s1 * 20);
+      const NRm = this.mesh.NR;
+      let cLo = 1e-6, cHi = 3;
+      for (let it = 0; it < 48; it++) { const cm = 0.5 * (cLo + cHi); if (s1 * Math.expm1(cm * NRm) / cm > smax) cHi = cm; else cLo = cm; }
+      t.set('u_s1', s1); t.set('u_c', 0.5 * (cLo + cHi));
+      // камера в картах граней куба (гномоника R·(x/z, y/z)) — в double, по модулю 4096 и 2^24 м: узлы решётки
+      // рельефа считаются в шейдере относительно камеры без потери точности float32
+      const fc = new Float32Array(24);
+      for (let f = 0; f < 6; f++) {
+        const c = toFace(n0, f);
+        if (c[2] <= 0.1) continue;
+        const u = R * c[0] / c[2], v = R * c[1] / c[2];
+        const md = (x, m) => ((x % m) + m) % m;
+        fc.set([md(u, 4096), md(v, 4096), md(u, 16777216), md(v, 16777216)], f * 4);
+      }
+      t.set('u_faceC', fc);
       t.set('u_n0', f32(n0)); t.set('u_E', f32(E)); t.set('u_Nn', f32(N));
       t.set('u_camAlt', camAlt); t.set('u_pmod', f32(pmod));
       const cr = r.cam.right, cu = r.cam.up, cb = v3.scale(r.cam.forward, -1);
@@ -1017,7 +1048,7 @@
       t.set('u_texP', f32([tc ? r.texFade(tc) : 0, tc ? tc.w : 1, p.texGain || 1, 0]));
       const lc = (c) => f32(c);
       t.set('u_col1', lc(p.col1)); t.set('u_col2', lc(p.col2)); t.set('u_col3', lc(p.col3));
-      t.set('u_sunC', f32(sunC)); t.set('u_amb', f32(this._amb || [0, 0, 0]));
+      t.set('u_sunC', f32(sunC)); t.set('u_amb', f32((this._amb || [0, 0, 0]).map((a, i) => a + ambN[i])));
       t.set('u_upB', f32(n0)); t.set('u_parL', f32(parL)); t.set('u_parC', f32(parC));
       t.set('u_pixAng', 2 * r.tanHalf / r.height);
       t.set('u_time', sc.realTime); t.set('u_micro', Tq.micro ?? 1); t.set('u_microOct', Tq.microOct || 12);

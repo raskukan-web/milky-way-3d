@@ -238,12 +238,20 @@
       if (!this.superList || !this.superList.length) return;
       const U = MW.util;
       // синтетические рои показываются, когда камера ушла из Местной группы (вблизи Солнца — реальные галактики)
-      const out = U.smoothstep(6e6, 4e7, sunD) * (1 - 0.85 * this.galaxyFill(cam));
-      if (out < 0.01) return;
+      const fill = 1 - 0.85 * this.galaxyFill(cam);
+      const out = U.smoothstep(6e6, 4e7, sunD) * fill;
+      // Ближние сверхскопления (Девы, Печи, Гидры — Центавра, Эридана…) деликатно проявляются сразу за диском
+      // Млечного Пути — с 80–120 тыс. св. лет от центра Галактики — и плавно ярчают с удалением: при вылете из
+      // Галактики нет «прослойки черноты». Только те, что целиком вне камеры (внутри Ланиакеи/Местного
+      // сверхскопления их рои окружали бы Галактику): ранний вклад — по удалению от их внешнего края.
+      const dGC = v3.dist(cam.pos, MW.C.GC_POS);
+      const early = U.smoothstep(8e4, 1.2e5, dGC) * (0.18 + 0.82 * U.smoothstep(1.2e5, 6e6, dGC)) * fill;
+      if (out < 0.01 && early < 0.01) return;
       for (const s of this.superList) {
         const o = s.obj, D = v3.dist(cam.pos, o.pos);
         const far = 1 - U.smoothstep(o.radius * 40, o.radius * 160, D);
-        const k = out * far;
+        const near = o.dist < 3e8 && o.id !== 'laniakea' ? 0.55 * early * U.smoothstep(o.radius * 0.9, o.radius * 1.3, D) : 0;
+        const k = Math.max(out, near) * far;
         if (k < 0.01) continue;
         this.drawParticles(s.buf, o.pos, null, 0.5 * k, 3.0, false, false);
       }
@@ -793,7 +801,9 @@
       // переход от каталога к процедурной структуре без скачка. Сферы реликтового излучения нет: за горизонтом
       // (46,5 млрд св. лет) — чёрный космос; дальние объекты гаснут туманом по расстоянию от камеры.
       // ближний слой паутины проявляется сразу за Местной группой (15 млн св. лет) — без чёрной пустоты вокруг OpenNGC
-      const webK = Math.sqrt(U.smoothstep(0, 1, Math.log(Math.max(sunD, 1) / 5e5) / Math.log(2e7 / 5e5)));
+      // (отсчёт — от центра Галактики: паутина начинает проявляться сразу за её диском, с ~80 тыс. св. лет)
+      const dGC = v3.dist(cam.pos, MW.C.GC_POS);
+      const webK = Math.sqrt(U.smoothstep(0, 1, Math.log(Math.max(dGC, 8e4) / 8e4) / Math.log(2e7 / 8e4)));
       if (webK > 0.01) {
         // яркость растёт с расстоянием: издали видна вся сеть, а не отдельные точки
         const gain = webK * (1 - 0.8 * this.galaxyFill(cam)) * (0.22 +0.43 * U.smoothstep(1.5e9, 4e9, sunD) + 1.2 * U.smoothstep(1e9, 8e9, sunD) + 2.2 * U.smoothstep(8e9, 3.5e10, sunD));
